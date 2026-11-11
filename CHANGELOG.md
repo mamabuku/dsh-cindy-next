@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.10 — 2026-11-11 (dsh-cindy-next)
+
+- Group by Workspace ownership, not by a session's working directory. A session whose summary lost its cwd still appears under its Workspace, and sessions in no Workspace are collected into one 「未分组」 project — the same shape as the DSH sidebar.
+- Alias the 「未分组」 bucket so the phone shows a Chinese name there instead of a pseudo path.
+
 ## 0.1.9 — 2026-11-11 (dsh-cindy-next)
 
 - The default Workspace is shown on the phone as 「默认工作区」, the name DSH's own sidebar renders, instead of the storage key `default-workspace`.

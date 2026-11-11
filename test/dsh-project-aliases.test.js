@@ -26,6 +26,7 @@ test('workspace titles become local: aliases and untitled workspaces fall back t
   assert.deepEqual(snapshot.aliases, [
     { projectKey: 'local:/Users/me/投资', alias: '财务' },
     { projectKey: 'local:/Users/me/default-workspace', alias: '默认工作区' },
+    { projectKey: 'local:/__dsh_unfiled__', alias: '未分组' },
   ]);
   assert.equal(snapshot.platform, process.platform);
   assert.deepEqual(snapshot.ownerStamp, { dataOwnerId: 'verified-account-device-source', ownerGeneration: 1 });
@@ -42,7 +43,7 @@ test('alias text is flattened, capped at the controller limit, and never invente
   const aliases = f.port.read().aliases;
   assert.deepEqual(aliases[0], { projectKey: 'local:/a', alias: '财务 平台' });
   assert.equal([...aliases[1].alias].length, MAX_PROJECT_ALIAS_LENGTH);
-  assert.equal(aliases.length, 2, 'an empty or missing title is skipped, not replaced by the path');
+  assert.equal(aliases.length, 3, 'two titles plus the unfiled bucket');
 });
 
 test('unkeyable and duplicate paths are skipped instead of guessed', () => {
@@ -51,7 +52,7 @@ test('unkeyable and duplicate paths are skipped instead of guessed', () => {
     { id: '2', path: '/same', title: 'First' },
     { id: '3', path: '/same/', title: 'Duplicate' },
   ]);
-  assert.deepEqual(f.port.read().aliases, [{ projectKey: 'local:/same', alias: 'First' }]);
+  assert.deepEqual(f.port.read().aliases, [{ projectKey: 'local:/same', alias: 'First' }, { projectKey: 'local:/__dsh_unfiled__', alias: '未分组' }]);
 });
 
 test('a registry that is not mounted yields the empty shape rather than an error', () => {
@@ -80,7 +81,7 @@ test('onChange announces a real title change only', () => {
   f.replace([{ id: '1', path: '/Users/me/投资', title: '投资', updatedAt: '2026-11-04T00:00:00.000Z' }]);
   for (const fn of f.listeners) fn();
   assert.equal(events.length, 1);
-  assert.deepEqual(events[0].aliases, [{ projectKey: 'local:/Users/me/投资', alias: '投资' }]);
+  assert.deepEqual(events[0].aliases, [{ projectKey: 'local:/Users/me/投资', alias: '投资' }, { projectKey: 'local:/__dsh_unfiled__', alias: '未分组' }]);
   close();
   assert.equal(f.listeners.size, 0);
 });
@@ -123,5 +124,6 @@ test('the default workspace is shown with the same name the DSH sidebar uses', (
   assert.deepEqual(f.port.read().aliases, [
     { projectKey: 'local:/Users/me/default-workspace', alias: '默认工作区' },
     { projectKey: 'local:/Users/me/finance', alias: '财务' },
+    { projectKey: 'local:/__dsh_unfiled__', alias: '未分组' },
   ]);
 });

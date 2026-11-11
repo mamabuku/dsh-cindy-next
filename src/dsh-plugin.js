@@ -737,6 +737,17 @@ export function buildDshSource(ctx, serviceName, options = {}) {
       sessionController,
       readActiveSessions: () => readActiveSessionSummaries(ctx),
       // Only registered Workspaces are projects on the phone, exactly like the DSH sidebar.
+      getWorkspaceIndex: () => {
+        const registry = ctx.get('workspaceRegistry');
+        if (!registry || typeof registry.list !== 'function') return undefined;
+        try {
+          const index = new Map();
+          for (const workspace of registry.list()) {
+            for (const sessionId of workspace.sessionIds ?? []) index.set(String(sessionId), { path: String(workspace.path) });
+          }
+          return index;
+        } catch { return undefined; }
+      },
       getWorkspacePaths: () => {
         const registry = ctx.get('workspaceRegistry');
         if (!registry || typeof registry.list !== 'function') return undefined;

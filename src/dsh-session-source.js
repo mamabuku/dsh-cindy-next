@@ -20,6 +20,9 @@
  */
 
 /** Activity kinds the projection's allowlist accepts (see `contracts.js`). */
+/** The pseudo-project the DSH sidebar calls 「未分组」: sessions in no Workspace. */
+export const UNFILED_PROJECT_PATH = '/__dsh_unfiled__';
+
 function activity(kind, sessionId, phase, extra = {}) {
   return { kind, sessionId: String(sessionId), sequence: 0, phase, ...extra };
 }
@@ -60,6 +63,11 @@ export function createSessionControllerSource({
   readActivityEvidence,
   readSessionSummary,
   readActiveSessions,
+  // sessionId → the registered Workspace that owns it (path + title). When present,
+  // the list groups by ownership instead of guessing from a session's cwd: an old
+  // session whose summary lost its cwd still belongs to its Workspace, and a session
+  // in no Workspace belongs to 「未分组」 exactly like the DSH sidebar.
+  getWorkspaceIndex,
   // The registered Workspace paths, or undefined when the registry is not composed.
   // The controller's sidebar groups by working directory, so without this a session
   // whose cwd is not a real DSH project (agent scratch dirs, one-off temp folders)
@@ -399,11 +407,20 @@ export function createSessionControllerSource({
       // Sidebar discovery must match DSH's own sidebar: only sessions that live in a
       // registered Workspace are projects. `getSession` still answers any id, so a
       // session opened from a link is not lost by this filter.
-      let workspacePaths;
-      try { workspacePaths = getWorkspacePaths?.(); } catch { workspacePaths = undefined; }
-      if (workspacePaths instanceof Set && workspacePaths.size > 0) {
-        const allowed = new Set([...workspacePaths].map((value) => String(value).replace(/[\\/]+$/, '')));
-        rows.splice(0, rows.length, ...rows.filter((row) => !row.cwd || allowed.has(String(row.cwd).replace(/[\\/]+$/, ''))));
+      let index;
+      try { index = getWorkspaceIndex?.(); } catch { index = undefined; }
+      if (index instanceof Map && index.size > 0) {
+        for (const row of rows) {
+          const owner = index.get(row.id);
+          row.cwd = owner ? owner.path : UNFILED_PROJECT_PATH;
+        }
+      } else {
+        let workspacePaths;
+        try { workspacePaths = getWorkspacePaths?.(); } catch { workspacePaths = undefined; }
+        if (workspacePaths instanceof Set && workspacePaths.size > 0) {
+          const allowed = new Set([...workspacePaths].map((value) => String(value).replace(/[\\/]+$/, '')));
+          rows.splice(0, rows.length, ...rows.filter((row) => !row.cwd || allowed.has(String(row.cwd).replace(/[\\/]+$/, ''))));
+        }
       }
       // A current sessionQuery title reader is the authority for sidebar discovery.
       // Hide rows that have never produced a real title; exact getSession remains

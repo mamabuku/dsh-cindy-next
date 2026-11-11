@@ -1,5 +1,6 @@
 import { refusalError } from './cindy-channels.js';
 import { projectOrderKey } from './dsh-project-order.js';
+import { UNFILED_PROJECT_PATH } from './dsh-session-source.js';
 
 /**
  * Project display names, as Cindy's sidebar expects them.
@@ -80,6 +81,9 @@ export function createDshProjectAliases({ getRegistry, getOwner, subscribeChange
       const updatedAt = row.updatedAt instanceof Date ? row.updatedAt.toISOString() : (typeof row.updatedAt === 'string' ? row.updatedAt : null);
       list.push({ projectKey, alias, updatedAt });
     }
+    // Sessions in no Workspace are shown as one 「未分组」 project, like the sidebar.
+    const unfiledKey = projectOrderKey(UNFILED_PROJECT_PATH);
+    if (!seen.has(unfiledKey)) aliases.push({ projectKey: unfiledKey, alias: "未分组" });
     const owner = getOwner?.();
     const ownerStamp = owner && typeof owner.dataOwnerId === 'string' && owner.dataOwnerId !== '' && Number.isSafeInteger(owner.ownerGeneration) && owner.ownerGeneration >= 0
       ? { dataOwnerId: owner.dataOwnerId, ownerGeneration: owner.ownerGeneration }
