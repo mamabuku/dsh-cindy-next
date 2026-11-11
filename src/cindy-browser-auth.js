@@ -7,7 +7,11 @@ const hash = value => createHash('sha256').update(value).digest('base64url');
 function delay(ms, signal) {
   return new Promise(resolve => {
     const done = () => { clearTimeout(timer); signal.removeEventListener('abort', done); resolve(); };
-    const timer = setTimeout(done, ms); timer.unref?.();
+    // Keep this timer *referenced*: between polls the hosted flow has no server/socket of
+    // its own, so an unref'd timer lets the event loop drain and the pending auth promise
+    // is abandoned (Node reports "resolution is still pending..."). A login in progress is
+    // active work, so it is right for it to hold the loop until it settles or is aborted.
+    const timer = setTimeout(done, ms);
     signal.addEventListener('abort', done, { once: true });
     if (signal.aborted) done();
   });

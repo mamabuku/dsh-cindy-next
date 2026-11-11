@@ -1,9 +1,9 @@
 {
-  "provenance": "Extracted from Cindy/packages/device-link/src/allowlist.ts: REMOTE_INVOKE_ALLOWLIST = {device-link:remote-desktop:v1} + CORE_INVOKE_CHANNELS + EXTENDED_INVOKE_CHANNELS, with the constant references those blocks use resolved to their literals.",
+  "provenance": "Extracted from Cindy/packages/device-link/src/allowlist.ts: REMOTE_INVOKE_ALLOWLIST = {device-link:remote-desktop:v1} + CORE_INVOKE_CHANNELS + EXTENDED_INVOKE_CHANNELS, with the constant references those blocks use resolved to their literals. Also carries two channels observed from the Cindy DESKTOP controller on the DeviceLink invoke path (2026-11-11: sidebar-settings:get-project-aliases refused with CHANNEL_NOT_ALLOWED before this Host served it); the mobile allowlist alone does not list them.",
   "caveat": "A LOWER BOUND: two entries could not be resolved statically and are absent here - REMOTE_RESOURCE_CHANNELS (a spread of a set defined in remoteResources.ts) and DL_VOICE_CREDENTIAL_SYNC (not a plain literal). Regex artifacts (bare words like \"error\") were dropped.",
   "extractedAt": "2026-09-16",
   "filePeerVerifiedAt": "2026-09-20: allowlist.ts includes FILE_PEER_CHANNEL; filePeer.ts resolves it to device-link:file-peer (30s invoke budget).",
-  "count": 193,
+  "count": 195,
   "channels": [
     "desktop-cmd:run",
     "device-link:file-peer",
@@ -48,6 +48,7 @@
     "local-db:orca-workflows:get-by-lead",
     "local-db:orca-workflows:get-by-worker-session",
     "local-db:orca-workflows:list-workers-by-lead",
+    "local-db:project-aliases:list",
     "local-db:recent-workdirs:list",
     "local-db:recent-workdirs:remove",
     "local-db:sessions:ack-interrupted",
@@ -190,6 +191,7 @@
     "maker:worker:switch-focus",
     "notification:clear-session-attention",
     "sidebar-settings:apply-project-order",
+    "sidebar-settings:get-project-aliases",
     "sidebar-settings:get-project-order",
     "text-file:read-preview",
     "worktree:create",

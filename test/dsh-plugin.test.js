@@ -58,7 +58,7 @@ test('the awaited question boundary propagates native cancellation instead of re
 });
 
 test('exports the DSH Host bundle identity and only requires settings', () => {
-  assert.equal(name, 'dsh-cindy-host');
+  assert.equal(name, 'dsh-cindy-next');
   assert.deepEqual(inject, ['settings']);
 });
 

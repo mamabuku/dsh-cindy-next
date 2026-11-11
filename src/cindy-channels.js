@@ -249,6 +249,10 @@ export const SUPPORTED_CHANNELS = Object.freeze([
   'maker:schedule:delete',
   'sidebar-settings:get-project-order',
   'sidebar-settings:apply-project-order',
+  // Project display names for the controller's sidebar. Reads the native Workspace
+  // titles; without it the phone falls back to the folder basename (English/UUID).
+  'sidebar-settings:get-project-aliases',
+  'local-db:project-aliases:list',
   'local-db:history:messages',
   'maker:input:session-reference-capability',
   'maker:set-effort',
@@ -1566,6 +1570,21 @@ export function createChannelRouter({
 
     // Approvals. The questions are DSH's own pending `approval/request`s, routed
     // here only while a controller is watching the asking session.
+    if (channel === 'sidebar-settings:get-project-aliases' || channel === 'local-db:project-aliases:list') {
+      if (args.length !== 0) return invokeError(request, 'BAD_REQUEST', 'Invalid project-alias argument count');
+      const port = capabilitiesNow().projectAliases;
+      // A Host that cannot name its Workspaces is not an error for the phone: it
+      // already falls back to the folder basename. Answer the empty shape, don't refuse.
+      if (channel === 'sidebar-settings:get-project-aliases') {
+        if (typeof port?.read !== 'function') return invokeResult(request, { aliases: [], platform: process.platform });
+        try { return invokeResult(request, port.read()); }
+        catch (error) { return invokeError(request, refusalCodeOf(error), String(error?.message ?? error)); }
+      }
+      if (typeof port?.list !== 'function') return invokeResult(request, []);
+      try { return invokeResult(request, port.list()); }
+      catch (error) { return invokeError(request, refusalCodeOf(error), String(error?.message ?? error)); }
+    }
+
     if (channel === 'sidebar-settings:get-project-order' || channel === 'sidebar-settings:apply-project-order') {
       const read = channel === 'sidebar-settings:get-project-order';
       if (args.length !== (read ? 0 : 1)) return invokeError(request, 'BAD_REQUEST', 'Invalid project-order argument count');

@@ -17,7 +17,7 @@
  *
  * Exits non-zero when an unclassified channel is found.
  */
-import { readFileSync, readdirSync } from 'node:fs';
+import { readFileSync, readdirSync, existsSync } from 'node:fs';
 import path from 'node:path';
 import { SUPPORTED_CHANNELS } from '../src/cindy-channels.js';
 import { HOST_PUSH_CHANNELS } from '../src/host-push-channels.js';
@@ -26,7 +26,21 @@ import { importedChannelConstants, referencedChannels, literalChannelCalls } fro
 
 const args = process.argv.slice(2);
 const cindyIndex = args.indexOf('--cindy');
-const CINDY = cindyIndex === -1 ? 'G:/Projects/Cindy' : args[cindyIndex + 1];
+const explicitCindy = cindyIndex !== -1;
+const CINDY = explicitCindy ? args[cindyIndex + 1] : (process.env.CINDY_SOURCE || 'G:/Projects/Cindy');
+// The reference host's TypeScript checkout is not part of this repository, so a fork
+// built on a machine that has only the Cindy app installed cannot read it. Say that
+// plainly instead of crashing with ENOENT: an unavailable audit is not a pass, and the
+// release notes must carry the skip.
+if (!existsSync(CINDY)) {
+  if (explicitCindy) {
+    console.error(`channel audit: ${CINDY} does not exist`);
+    process.exit(2);
+  }
+  console.log(`channel audit: SKIPPED — no Cindy checkout at ${CINDY} (set CINDY_SOURCE or pass --cindy)`);
+  console.log('  served channels are still imported from src/cindy-channels.js, but the phone vocabulary cannot be compared here.');
+  process.exit(0);
+}
 const TRANSPORT = path.join(CINDY, 'apps/mobile/src/device-link/mobileMakerTransport.ts');
 const ALLOWLIST = path.join(CINDY, 'packages/device-link/src/allowlist.ts');
 const INVOKE_POLICY = path.join(CINDY, 'packages/device-link/src/invokePolicy.ts');

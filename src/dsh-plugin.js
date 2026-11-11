@@ -16,6 +16,7 @@ import { createDshBackgroundJobs } from './dsh-background-jobs.js';
 import { createDshSubagentReads } from './dsh-subagent-reads.js';
 import { createDshReminders } from './dsh-reminders.js';
 import { createDshProjectOrder } from './dsh-project-order.js';
+import { createDshProjectAliases } from './dsh-project-aliases.js';
 import { createDshReferenceHistory } from './dsh-reference-history.js';
 import { readActiveSessionSummaries } from './dsh-active-sessions.js';
 import { createMessageCounter, createMessageReader, foldSessionEvent, isHarnessNotice, promptRpcIdOf } from './dsh-message-fold.js';
@@ -32,7 +33,7 @@ import { hydrateImageAttachments } from './cindy-message-row.js';
 import { API_PREFIX, createHostRoutes } from './host-routes.js';
 import { createCredentialStore } from './credential-store.js';
 
-export const name = 'dsh-cindy-host';
+export const name = 'dsh-cindy-next';
 export const inject = ['settings'];
 
 /**
@@ -824,11 +825,18 @@ export function buildDshSource(ctx, serviceName, options = {}) {
       subscribeChanged: listener => subscribe('domain/changed', listener),
     });
     sessionSource.projectOrder = projectOrder;
+    const projectAliases = createDshProjectAliases({
+      getRegistry: () => ctx.get('workspaceRegistry'),
+      getOwner: () => options.getProjectOrderOwner?.(),
+      subscribeChanged: listener => subscribe('domain/changed', listener),
+    });
+    sessionSource.projectAliases = projectAliases;
     const referenceHistory = createDshReferenceHistory({ getQuery: () => ctx.get('sessionQuery'), getSession: (id, options) => sessionSource.getSession(id, options) });
     sessionSource.referenceHistory = referenceHistory;
     return {
       referenceHistory,
       projectOrder,
+      projectAliases,
       reminders,
       subagentReads,
       backgroundJobs,
@@ -1521,6 +1529,7 @@ export function capabilityProvider(sources) {
     subagentReads: sources.subagentReads,
     reminders: sources.reminders,
     projectOrder: sources.projectOrder,
+    projectAliases: sources.projectAliases,
     referenceHistory: sources.referenceHistory,
     fileBrowser: sources.fileBrowser,
   };
@@ -1986,6 +1995,7 @@ export function apply(ctx, config) {
         built.subagentReads?.dispose();
         built.reminders?.dispose();
         built.projectOrder?.dispose();
+        built.projectAliases?.dispose();
         built.referenceHistory?.dispose();
         if (sourceKind === built.kind) sourceKind = 'none';
         currentSource = undefined;

@@ -32,7 +32,7 @@
  * @module dsh-cindy-host/host-media-fetch
  */
 import { createRequire } from 'node:module';
-import { extname, isAbsolute, relative, resolve as resolvePath } from 'node:path';
+import { posix as posixPath, win32 as win32Path } from 'node:path';
 import { constants as fsConstants } from 'node:fs';
 import { open as openImpl, readFile as readFileImpl, realpath as realpathImpl, stat as statImpl } from 'node:fs/promises';
 import { FILE_INLINE_MAX_BYTES, FILE_PEER_MAX_BYTES } from './file-peer-protocol.js';
@@ -200,9 +200,28 @@ const MIME_BY_EXT = Object.freeze({
   '.pdf': 'application/pdf', '.txt': 'text/plain', '.md': 'text/markdown', '.json': 'application/json',
 });
 
+/**
+ * Whether a path is Windows-shaped (a drive letter, a UNC share, or a leading backslash).
+ *
+ * The *form* of the path decides which path rules apply, not `process.platform`: a
+ * `G:\work\cat.png` reference that a controller sends is still a win32 path when this Host
+ * happens to run on macOS/Linux, and a `/home/me/cat.png` reference is not a win32 path when
+ * the Host runs on Windows. Classifying by shape is what keeps containment, the never-serve
+ * list and every path comparison honest without loosening any of them.
+ */
+function isWindowsShapedPath(value) {
+  const path = String(value);
+  return /^[A-Za-z]:[\\/]/.test(path) || path.startsWith('\\\\') || path.startsWith('\\');
+}
+
+/** The `node:path` implementation matching the shape of the given path(s). */
+function pathApiFor(...values) {
+  return values.some((value) => isWindowsShapedPath(value)) ? win32Path : posixPath;
+}
+
 /** The content type one path is served with. */
 export function mimeForMediaPath(path) {
-  return MIME_BY_EXT[extname(String(path)).toLowerCase()] ?? 'application/octet-stream';
+  return MIME_BY_EXT[pathApiFor(path).extname(String(path)).toLowerCase()] ?? 'application/octet-stream';
 }
 
 /**
@@ -219,8 +238,9 @@ const DEFAULT_BLOCKED = Object.freeze([
 
 /** Whether a resolved path is inside a resolved directory (equal counts as inside). */
 export function isInsideDirectory(child, parent) {
-  const rel = relative(parent, child);
-  return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel));
+  const api = pathApiFor(child, parent);
+  const rel = api.relative(parent, child);
+  return rel === '' || (!rel.startsWith('..') && !api.isAbsolute(rel));
 }
 
 /** Whether a request path is fully qualified (drive-absolute or root-absolute). */
@@ -490,7 +510,7 @@ export function createLocalMediaFetcher({
       }
     }
 
-    const stagedResult = await uploader(bytes, { ext: extname(real).slice(1), contentType: mimeType });
+    const stagedResult = await uploader(bytes, { ext: pathApiFor(real).extname(real).slice(1), contentType: mimeType });
     if (stagedResult?.ok !== true) {
       return { ok: false, code: 'INTERNAL', message: `the file could not be staged for the controller: ${String(stagedResult?.reason ?? 'unknown reason')}` };
     }

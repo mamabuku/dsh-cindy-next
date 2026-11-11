@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.1.0 — 2026-11-11 (dsh-cindy-next)
+
+- New package identity **dsh-cindy-next**, forked from `dsh-cindy-host` 0.1.41 so it can diverge without colliding with upstream. The Settings namespace, HTTP prefix (`/api/dsh-cindy-host`) and durable state directory keep the old name on purpose: upgrading in place keeps the connection switch, host name and queued input. Do not run it beside `dsh-cindy-host` in one profile.
+- Serve `sidebar-settings:get-project-aliases` and `local-db:project-aliases:list` from the native Workspace registry. Cindy's sidebar now shows a Workspace's DSH title (e.g. 财务) instead of the folder basename; the desktop controller was calling this channel and getting `CHANNEL_NOT_ALLOWED`. Read-only: titles only, and an unkeyable, ambiguous or untitled Workspace is skipped rather than guessed.
+- Fix the Settings card falling back to English on Node 22+: the global `navigator.language` is `en-US`, so the locale now comes from `window.navigator` only.
+- macOS credentials: decode `security … -w` hex output when the stored secret holds non-ASCII bytes (e.g. a display name like 黑娃®) instead of failing to parse the record.
+- Test suite runs green on macOS: media / file-reference path classification follows the path shape (drive letter, UNC, leading backslash) instead of the host platform, and the hosted-login tests keep their own poll timer referenced. 1,253 tests, 1,244 passed, 9 skipped, 0 failed.
+- Verified against DSH `0.2.2-rc.1`. The channel audit is **skipped** in this build: the reference Cindy TypeScript checkout is not present on this machine, and `tools/channel-audit.mjs` now says so instead of failing with ENOENT.
+
 ## 0.1.41 — 2026-11-08
 
 - Accept the exact DSH `0.2.2-rc.1` Agent/Session/Settings carrier alongside the existing 0.2.1 RC and 0.2.2-alpha.2 peers. Keep DSH packages host-provided and preserve 0.1.40's complete feature set, including credentials without keytar.

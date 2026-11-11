@@ -1,6 +1,12 @@
-# DSH Cindy Host
+# DSH Cindy Next (dsh-cindy-next)
 
 A Host-side adapter connecting current Cindy clients to DeepSeek Harness.
+
+> Fork of [dsh-cindy-host](https://github.com/chanyuenpang/dsh-cindy-host) 0.1.41, released under its own
+> package name **dsh-cindy-next** so it can diverge without colliding with upstream. The installed plugin id,
+> Settings namespace, HTTP prefix (`/api/dsh-cindy-host`) and durable state directory keep the old name on
+> purpose: upgrading in place keeps the connection switch, host name and queued input. Do not run it beside
+> `dsh-cindy-host` in one profile.
 
 ## Requirements and installation
 

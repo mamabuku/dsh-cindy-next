@@ -9,10 +9,6 @@ export const UNSUPPORTED_INVOKES = new Map([
     "No Cindy Ghost composer resource registry is composed on this Host; plain sends remain separate."
   ],
   [
-    "local-db:project-aliases:list",
-    "Project aliases are a Cindy sidebar store, not a DSH session property; do not fabricate alias data."
-  ],
-  [
     "local-db:task-tags:execute",
     "No task-tag mutation store or execution service is provided by this adapter."
   ],
