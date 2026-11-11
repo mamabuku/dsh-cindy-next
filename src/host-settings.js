@@ -1,4 +1,4 @@
-export const SETTINGS_NAMESPACE = 'dsh-cindy-host';
+export const SETTINGS_NAMESPACE = 'dsh-cindy-next';
 
 // Network access is opt-in. A newly mounted bundle only projects local DSH data.
 //

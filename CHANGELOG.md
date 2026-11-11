@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.1 — 2026-11-11 (dsh-cindy-next)
+
+- Fix the 0.1.0 regression that left the plugin inert after install: DSH 0.2 keys a plugin's Settings surface by its **profile entry id**, so keeping the old `dsh-cindy-host` settings namespace meant `settings.describe()` never matched, the card reported 「Cindy Host 设置命名空间不可用」 and the relay stayed at its `transportEnabled: false` defaults. The namespace now follows the entry id (`dsh-cindy-next`) on both the Host and the client bundle; the patch entry keeps the migrated switch, `deviceId` and `sessionFlags`.
+- No other behavior changes from 0.1.0.
+
 ## 0.1.0 — 2026-11-11 (dsh-cindy-next)
 
 - New package identity **dsh-cindy-next**, forked from `dsh-cindy-host` 0.1.41 so it can diverge without colliding with upstream. The Settings namespace, HTTP prefix (`/api/dsh-cindy-host`) and durable state directory keep the old name on purpose: upgrading in place keeps the connection switch, host name and queued input. Do not run it beside `dsh-cindy-host` in one profile.

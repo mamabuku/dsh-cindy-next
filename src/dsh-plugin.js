@@ -1639,7 +1639,7 @@ export function sessionFlagsWriter(settings, ns) {
  * **0.2 removed `register`.** The host now reads the plugin **entry's own `Config`** schema
  * (`SettingsForms.describe()`, keyed by **profile entry id**), resolves it, and hands the value
  * to `apply(ctx, config)`; `update`/`mutate` address that same entry id. This bundle's row is
- * `- id: dsh-cindy-host` (see `cordis.patch.yml`), so `SETTINGS_NAMESPACE` names the same
+ * `- id: dsh-cindy-next` (see `cordis.patch.yml`), so `SETTINGS_NAMESPACE` names the same
  * surface under both models — only the way the plugin obtains it differs. Hence one seam with
  * two branches instead of two code paths through the rest of the plugin.
  *

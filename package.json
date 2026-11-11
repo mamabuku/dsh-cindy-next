@@ -1,6 +1,6 @@
 {
   "name": "dsh-cindy-next",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": false,
   "description": "dsh-cindy-next：Cindy 手机客户端连接 DSH 的 Host 侧插件（自 dsh-cindy-host 0.1.41 fork，独立迭代）",
   "license": "MIT",

@@ -210,13 +210,13 @@ test('the bundle registers one settings page under its own namespace', () => {
   // Resolved through the non-blocking form instead, which is why an absent provider is
   // survivable.
   assert.deepEqual(injected, ['settingsScope']);
-  assert.deepEqual(captured.bound, { namespace: 'dsh-cindy-host' });
+  assert.deepEqual(captured.bound, { namespace: 'dsh-cindy-next' });
   assert.equal(slots.registrations.length, 1);
   const options = slots.registrations[0].options;
   assert.equal(options.name, SLOT);
   // A list slot keys its entries by `id`, not by a keyed slot's `key`.
   assert.equal(options.key, undefined);
-  assert.equal(options.id, 'dsh-cindy-host');
+  assert.equal(options.id, 'dsh-cindy-next');
   assert.equal(options.order, moduleExports.__internals.SECTION_ORDER);
   assert.equal(options.order > 20, true, 'sits after agent-presets (order 20)');
   assert.equal(options.label(), moduleExports.__internals.TEXT.title);
@@ -228,9 +228,9 @@ test('0.2: resolves the same page through configForms.get(entryId)', () => {
   const { captured, moduleExports, slots, injected, provided } = mountDeclared(scope, 'configForms');
   assert.deepEqual(provided, ['configForms']);
   assert.deepEqual(injected, ['configForms']);
-  assert.deepEqual(captured.bound, { entryId: 'dsh-cindy-host' });
+  assert.deepEqual(captured.bound, { entryId: 'dsh-cindy-next' });
   assert.equal(slots.registrations.length, 1);
-  assert.equal(slots.registrations[0].options.id, 'dsh-cindy-host', 'same section id on both generations');
+  assert.equal(slots.registrations[0].options.id, 'dsh-cindy-next', 'same section id on both generations');
   assert.equal(slots.registrations[0].options.order, moduleExports.__internals.SECTION_ORDER);
   const html = render(React.createElement(slots.registrations[0].component, null));
   assert.match(html, /role="switch"/);
