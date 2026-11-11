@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.6 — 2026-11-11 (dsh-cindy-next)
+
+- Settings page redesign: grouped rows (label column + control column) with a header status pill, section dividers, a row-style device list (online dot, name, monospace metadata, right-aligned delete) and the host line on its own rule. Same controls, copy and behaviour; only layout and styles changed.
+
 ## 0.1.5 — 2026-11-11 (dsh-cindy-next)
 
 - Make a removed device recoverable. The relay refuses `4410` with `device removed; sign in again to register`, but every later sign-in reused the same stored device handle (`hostDeviceId` prefers the credential, then the remembered id), so signing in again repeated the refusal. On `4410/4401` the runtime now drops both the credential and the remembered handle (`resetDeviceIdentity`) before showing the sign-in form, so the next login registers a fresh device.

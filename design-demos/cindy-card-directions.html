@@ -1,0 +1,172 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>Cindy 手机连接 — 界面方向</title>
+<style>
+  :root{
+    --bg-app:#0b0e14; --bg-1:#0f131a; --bg-2:#141a23; --bg-3:#181f29;
+    --bd-1:#222a36; --bd-2:#303a48; --bd-3:#3d4a5c;
+    --fg-1:#e8eef7; --fg-2:#a9b4c4; --fg-3:#788394;
+    --brand:#3b82f6; --brand-dim:#1e3a63; --ok:#22c55e; --warn:#f59e0b; --danger:#ef4444;
+    --radius:10px;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg-app);color:var(--fg-1);
+    font:14px/1.5 -apple-system,BlinkMacSystemFont,"PingFang SC","Segoe UI",sans-serif;
+    padding:28px 24px 48px}
+  .wrap{max-width:820px;margin:0 auto}
+  h1.page{font-size:13px;font-weight:600;color:var(--fg-3);letter-spacing:.02em;margin:0 0 18px}
+  .variant{margin:0 0 42px}
+  .tag{display:inline-flex;align-items:center;gap:8px;font-size:12px;color:var(--fg-3);margin:0 0 10px}
+  .tag b{color:var(--fg-2);font-weight:600}
+  .frame{background:var(--bg-1);border:1px solid var(--bd-1);border-radius:14px;padding:22px 24px}
+  .muted{color:var(--fg-3)} .small{font-size:12px}
+  .pill{display:inline-flex;align-items:center;gap:6px;height:24px;padding:0 10px;border-radius:999px;font-size:12px;font-weight:500}
+  .pill.ok{background:rgba(34,197,94,.12);color:#4ade80;border:1px solid rgba(34,197,94,.28)}
+  .dot{width:7px;height:7px;border-radius:50%;background:currentColor}
+  .sw{width:40px;height:22px;border-radius:11px;background:var(--brand);position:relative;flex:none}
+  .sw::after{content:"";position:absolute;top:3px;left:21px;width:16px;height:16px;border-radius:50%;background:#fff}
+  .btn{height:30px;padding:0 12px;border-radius:8px;border:1px solid var(--bd-3);background:transparent;color:var(--fg-2);font:inherit;font-size:12px;cursor:pointer}
+  .btn:hover{border-color:#4d5b70;color:var(--fg-1)}
+  .btn.primary{background:var(--brand);border-color:var(--brand);color:#fff}
+  .field{width:100%;height:34px;border-radius:8px;border:1px solid var(--bd-2);background:var(--bg-2);color:var(--fg-1);padding:0 10px;font:inherit}
+  .field:focus{outline:none;border-color:var(--brand);box-shadow:0 0 0 3px rgba(59,130,246,.18)}
+  .dev{display:flex;align-items:center;justify-content:space-between;gap:12px}
+  .dev .meta{font-size:12px;color:var(--fg-3);font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+  .ico{width:32px;height:32px;border-radius:8px;background:var(--bg-3);border:1px solid var(--bd-1);display:grid;place-items:center;color:var(--fg-2);flex:none;font-size:15px}
+
+  /* ── A 分组卡片（贴 DSH 设置页） ── */
+  .A .sec{display:grid;grid-template-columns:132px 1fr;gap:14px;padding:16px 0;border-top:1px solid var(--bd-1)}
+  .A .sec:first-of-type{border-top:0;padding-top:0}
+  .A .lab{font-size:13px;color:var(--fg-2);padding-top:3px}
+  .A .head{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;padding-bottom:16px;border-bottom:1px solid var(--bd-1)}
+  .A h2{margin:0 0 4px;font-size:15px;font-weight:600}
+  .A .devlist{display:flex;flex-direction:column;gap:2px}
+  .A .dev{padding:9px 0}
+  .A .dev + .dev{border-top:1px solid rgba(34,42,54,.7)}
+
+  /* ── B 紧凑清单 ── */
+  .B .card{background:var(--bg-2);border:1px solid var(--bd-1);border-radius:12px;overflow:hidden}
+  .B .row{display:flex;align-items:center;gap:14px;padding:13px 16px}
+  .B .row + .row{border-top:1px solid rgba(34,42,54,.75)}
+  .B .row .grow{flex:1;min-width:0}
+  .B .k{font-size:12px;color:var(--fg-3);margin:0 0 2px}
+  .B .v{font-size:13.5px;color:var(--fg-1)}
+  .B .top{display:flex;align-items:center;gap:10px;padding:16px 16px 14px}
+  .B h2{margin:0;font-size:15px;font-weight:600;flex:1}
+
+  /* ── C 状态优先 ── */
+  .C .hero{display:flex;align-items:center;gap:14px;padding:18px;border-radius:12px;
+    background:radial-gradient(120% 160% at 0% 0%, rgba(34,197,94,.10), transparent 55%), var(--bg-2);
+    border:1px solid rgba(34,197,94,.22)}
+  .C .hero .big{font-size:15px;font-weight:600;margin:0 0 2px}
+  .C .hero .sub{font-size:12px;color:var(--fg-3);margin:0}
+  .C .stat{display:flex;gap:22px;margin:16px 0 4px}
+  .C .stat .n{font-size:18px;font-weight:600;font-variant-numeric:tabular-nums}
+  .C .stat .l{font-size:11px;color:var(--fg-3);margin-top:2px}
+  .C .panel{margin-top:18px;border-top:1px solid var(--bd-1);padding-top:16px}
+  .C .panel .line{display:flex;align-items:center;justify-content:space-between;gap:14px;padding:8px 0}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1 class="page">Cindy 手机连接 · 三个界面方向（同一份内容，只换结构与气质）</h1>
+
+  <!-- A -->
+  <section class="variant A">
+    <div class="tag"><b>A · 分组卡片</b><span>最贴 DSH 设置页：左标签右控件，克制、稳</span></div>
+    <div class="frame">
+      <div class="head">
+        <div>
+          <h2>Cindy 手机连接</h2>
+          <div class="small muted">让 Cindy 手机客户端连上这台 DSH Host。</div>
+        </div>
+        <span class="pill ok"><span class="dot"></span>已连接</span>
+      </div>
+      <div class="sec">
+        <div class="lab">连接手机</div>
+        <div>
+          <div class="dev">
+            <div>
+              <div style="font-size:13px">打开后本机登录 Cindy 并接入 DeviceLink</div>
+              <div class="small muted">手机即可在设备列表中找到这台 Host。</div>
+            </div>
+            <div class="sw"></div>
+          </div>
+        </div>
+      </div>
+      <div class="sec">
+        <div class="lab">主机名称</div>
+        <div>
+          <div style="display:flex;gap:8px;align-items:center">
+            <input class="field" value="DSH Host">
+            <button class="btn">保存名称</button>
+          </div>
+          <div class="small muted" style="margin-top:6px">最多 64 个字符，不影响系统计算机名或设备连接。</div>
+        </div>
+      </div>
+      <div class="sec">
+        <div class="lab">账号</div>
+        <div class="dev">
+          <div class="small">已登录 Cindy · 黑娃®</div>
+          <button class="btn">退出登录</button>
+        </div>
+      </div>
+      <div class="sec">
+        <div class="lab">账号设备</div>
+        <div class="devlist">
+          <div class="dev"><div style="display:flex;gap:10px;align-items:center"><div class="ico">􀟜</div><div><div style="font-size:13px">iPhone</div><div class="meta">离线 · iOS · 1a818005</div></div></div><button class="btn">删除设备</button></div>
+          <div class="dev"><div style="display:flex;gap:10px;align-items:center"><div class="ico">􀙗</div><div><div style="font-size:13px">MacBook Pro</div><div class="meta">在线 · macOS · b85819ca</div></div></div><button class="btn">删除设备</button></div>
+        </div>
+      </div>
+      <div class="small muted" style="padding-top:14px;border-top:1px solid var(--bd-1)">本机设备：DSH Host · 569537d5 · Cindy 0.1.82</div>
+    </div>
+  </section>
+
+  <!-- B -->
+  <section class="variant B">
+    <div class="tag"><b>B · 紧凑清单</b><span>信息密度最高，一屏看完，适合常用设置</span></div>
+    <div class="frame" style="padding:0;background:transparent;border:0">
+      <div class="card">
+        <div class="top"><h2>Cindy 手机连接</h2><span class="pill ok"><span class="dot"></span>已连接</span><div class="sw"></div></div>
+        <div class="row"><div class="grow"><div class="k">主机名称</div><input class="field" value="DSH Host"></div><button class="btn">保存</button></div>
+        <div class="row"><div class="ico">􀟜</div><div class="grow"><div class="v">iPhone</div><div class="meta">离线 · iOS · 1a818005 · 11-11 12:41</div></div><button class="btn">删除</button></div>
+        <div class="row"><div class="ico">􀙗</div><div class="grow"><div class="v">MacBook Pro</div><div class="meta">在线 · macOS · b85819ca · 11-11 15:19</div></div><button class="btn">删除</button></div>
+        <div class="row"><div class="grow small muted">已登录 Cindy · 黑娃®<br>本机设备：DSH Host · 569537d5 · Cindy 0.1.82</div><button class="btn">退出登录</button></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- C -->
+  <section class="variant C">
+    <div class="tag"><b>C · 状态优先</b><span>顶部一块状态区，连接情况一眼可见，其余退到下面</span></div>
+    <div class="frame">
+      <div class="hero">
+        <div class="ico" style="background:rgba(34,197,94,.15);border-color:rgba(34,197,94,.3);color:#4ade80">C</div>
+        <div style="flex:1">
+          <p class="big">已连接</p>
+          <p class="sub">Cindy DeviceLink · DSH Host</p>
+        </div>
+        <div class="sw"></div>
+      </div>
+      <div class="stat">
+        <div><div class="n">2</div><div class="l">账号设备</div></div>
+        <div><div class="n">1</div><div class="l">在线</div></div>
+        <div><div class="n">0</div><div class="l">待处理</div></div>
+      </div>
+      <div class="panel">
+        <div class="line"><span class="small muted">主机名称</span><div style="display:flex;gap:8px"><input class="field" style="width:200px" value="DSH Host"><button class="btn">保存</button></div></div>
+        <div class="line"><span class="small muted">登录账号</span><span class="small">黑娃®</span></div>
+        <div class="line"><span class="small muted">本机设备</span><span class="meta">569537d5 · Cindy 0.1.82</span></div>
+      </div>
+      <div class="panel">
+        <div class="small muted" style="margin-bottom:6px">账号设备</div>
+        <div class="line"><div style="display:flex;gap:10px;align-items:center"><div class="ico">􀟜</div><div><div style="font-size:13px">iPhone</div><div class="meta">离线 · iOS</div></div></div><button class="btn">删除</button></div>
+        <div class="line"><div style="display:flex;gap:10px;align-items:center"><div class="ico">􀙗</div><div><div style="font-size:13px">MacBook Pro</div><div class="meta">在线 · macOS</div></div></div><button class="btn">删除</button></div>
+      </div>
+    </div>
+  </section>
+</div>
+</body>
+</html>

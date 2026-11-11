@@ -1,0 +1,125 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>Cindy 手机连接 — 真实组件预览</title>
+<style>
+  :root{
+    /* DSH dark theme stand-ins, so the real component renders with its own tokens. */
+    --dsw-alias-label-primary:#e6edf3;
+    --dsw-alias-label-secondary:#9da7b3;
+    --dsw-alias-label-tertiary:#8b949e;
+    --dsw-alias-label-primary-foreground:#ffffff;
+    --dsw-alias-bg-layer-1:#0d1117;
+    --dsw-alias-bg-layer-2:#11161d;
+    --dsw-alias-bg-layer-3:#161b22;
+    --dsw-alias-border-l2:#30363d;
+    --dsw-alias-border-l4:#484f58;
+    --dsw-alias-brand-primary:#2f81f7;
+    --dsw-alias-button-primary-fill:#238636;
+    --dsw-alias-state-success-primary:#3fb950;
+    --dsw-alias-state-error-primary:#e5534b;
+    --dsw-alias-state-warn-primary:#d29922;
+    --dsw-font-markdown-code-font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
+  }
+  html,body{margin:0;background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-primary);
+    font:14px/1.5 -apple-system,BlinkMacSystemFont,"PingFang SC","Segoe UI",sans-serif}
+  .shell{max-width:760px;margin:0 auto;padding:28px 24px 48px}
+  .panel{background:var(--dsw-alias-bg-layer-2);border:0.5px solid var(--dsw-alias-border-l2);border-radius:12px;padding:20px 22px}
+  .note{font-size:12px;color:var(--dsw-alias-label-tertiary);margin:0 0 14px}
+  .tabs{display:flex;gap:8px;margin:0 0 14px}
+  .tabs button{height:28px;padding:0 12px;border-radius:8px;border:0.5px solid var(--dsw-alias-border-l4);background:transparent;color:var(--dsw-alias-label-secondary);font:inherit;font-size:12px;cursor:pointer}
+  .tabs button.on{background:var(--dsw-alias-bg-layer-3);color:var(--dsw-alias-label-primary)}
+</style>
+</head>
+<body>
+<div class="shell">
+  <div class="tabs" id="tabs"></div>
+  <div class="panel" id="root"></div>
+  <p class="note" style="margin-top:14px">这是插件里的真实组件（lib/client.js）用假数据渲染出来的，不是手画的稿子。切换上方按钮看不同连接状态。</p>
+</div>
+
+<script src="vendor/react.development.js"></script>
+<script src="vendor/react-dom.development.js"></script>
+<script>
+  // The bundle decides its language from window.navigator.language.
+  try { Object.defineProperty(window.navigator, 'language', { value: 'zh-CN', configurable: true }); } catch {}
+
+  const scenarios = {
+    connected: {
+      label: '已连接',
+      status: {
+        state: 'connected', stateLabel: '已连接', message: null,
+        login: { authenticated: true, required: false, kind: 'wechat', identifier: '黑娃®' },
+        host: { deviceName: 'DSH Host', deviceId: '569537d5-48f3-472e-ab79-a313b99c01f1', appVersion: '0.1.82' },
+        devices: [
+          { deviceId: '1a818005-d40f-4597-8349-cdc176ce6eb2', name: 'iPhone', platform: 'ios', online: false, lastSeenAt: '2026-11-11T07:19:41Z' },
+          { deviceId: 'b85819ca131f9ca39b096adf8a3859e39623fd2ebf863541ad0a713f2f52359f', name: 'MacBook Pro', platform: 'darwin', online: true, lastSeenAt: '2026-11-11T07:19:13Z' }
+        ],
+        nameSync: { state: 'idle' }
+      }
+    },
+    connecting: {
+      label: '重连中',
+      status: {
+        state: 'connecting', stateLabel: '正在重连', message: '与 Cindy relay 的连接已断开（4410），16s 后自动重连（第 5 次）',
+        login: { authenticated: true, required: false, identifier: '黑娃®' },
+        host: null, devices: [], nameSync: { state: 'idle' }
+      }
+    },
+    signedOut: {
+      label: '未登录',
+      status: {
+        state: 'disconnected', stateLabel: '未连接', message: null,
+        login: { authenticated: false, required: true },
+        host: null, devices: [], nameSync: { state: 'idle' }
+      }
+    }
+  };
+
+  let registration;
+  window.__ModuleLoader__ = { load: (value) => { registration = value; } };
+  const state = { current: 'connected' };
+  window.fetch = async (url) => {
+    if (String(url).includes('/status')) {
+      return { ok: true, json: async () => ({ ok: true, status: scenarios[state.current].status }) };
+    }
+    return { ok: true, json: async () => ({ ok: true }) };
+  };
+</script>
+<script src="../../lib/client.js"></script>
+<script>
+  const React = window.React;
+  const moduleExports = registration.factory((specifier) => {
+    if (specifier === 'react') return window.React;
+    throw new Error('unexpected module ' + specifier);
+  });
+
+  function makeScope() {
+    const snapshot = { status: 'ready', writable: true, value: { transportEnabled: state.current !== 'signedOut', deviceName: 'DSH Host' } };
+    return {
+      getSnapshot: () => snapshot,
+      subscribe: () => () => {},
+      set: async () => true,
+      mutate: async () => true,
+    };
+  }
+
+  const Page = moduleExports.__internals.createCindySettingsPage(makeScope());
+  const root = ReactDOM.createRoot(document.getElementById('root'));
+  const tabs = document.getElementById('tabs');
+  for (const [key, scenario] of Object.entries(scenarios)) {
+    const button = document.createElement('button');
+    button.textContent = scenario.label;
+    button.className = key === state.current ? 'on' : '';
+    button.onclick = () => {
+      state.current = key;
+      for (const other of tabs.children) other.className = other.textContent === scenario.label ? 'on' : '';
+      root.render(React.createElement(Page));
+    };
+    tabs.appendChild(button);
+  }
+  root.render(React.createElement(Page));
+</script>
+</body>
+</html>
