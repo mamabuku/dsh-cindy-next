@@ -72,6 +72,10 @@ export function toCindySessionListRow(item, { now = () => new Date(), device, de
   const createdAt = item.createdAt ?? updatedAt;
   const title = titleOf(item.title);
   const workingDir = typeof item.cwd === 'string' && item.cwd !== '' ? item.cwd : null;
+  // What the *controller* groups by: the project's display path when the Host names
+  // one, otherwise the real working directory. Kept separate from `workingDir` so a
+  // display rename never rewrites the path other channels use for file access.
+  const projectDir = typeof item.projectDir === 'string' && item.projectDir !== '' ? item.projectDir : null;
 
   return {
     id,
@@ -119,9 +123,10 @@ export function toCindySessionListRow(item, { now = () => new Date(), device, de
       : DSH_PERMISSION_MODE,
     fastMode: false,
     workingDir,
-    // The controller groups by this: `workspaceKind === 'dialogue' || !workingDir`
+    ...(projectDir === null ? {} : { projectDir }),
+    // The controller groups by this: `workspaceKind === 'dialogue' || !(projectDir ?? workingDir)`
     // puts a row in the "chats" bucket, everything else under its project.
-    workspaceKind: workingDir === null ? 'dialogue' : 'project',
+    workspaceKind: workingDir === null && projectDir === null ? 'dialogue' : 'project',
     // A blank session has no user turn yet; the controller shows it as a draft.
     preview: null,
     userSendAt: typeof item.userSendAt === 'string' && item.userSendAt !== '' ? item.userSendAt : null,

@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.11 — 2026-11-11 (dsh-cindy-next)
+
+- Add the controller's `projectDir`: rows now carry a display path (`/__dsh_project__/<title>`) for grouping and naming while `workingDir` keeps the real directory for every path consumer (file browser, history, reminders).
+- Rename the unfiled bucket path to `/未分组`, so even a client that ignores Host aliases shows the Chinese name instead of `__dsh_unfiled__`.
+- 4401 (expired token) now asks for sign-in without dropping the device handle; only 4410 (device removed) resets the identity.
+- Accept one optional filter argument on the two project-alias channels; `local-db:project-aliases:list` now includes the unfiled row; deterministic first-wins for duplicate keys.
+
 ## 0.1.10 — 2026-11-11 (dsh-cindy-next)
 
 - Group by Workspace ownership, not by a session's working directory. A session whose summary lost its cwd still appears under its Workspace, and sessions in no Workspace are collected into one 「未分组」 project — the same shape as the DSH sidebar.

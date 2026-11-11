@@ -743,7 +743,9 @@ export function buildDshSource(ctx, serviceName, options = {}) {
         try {
           const index = new Map();
           for (const workspace of registry.list()) {
-            for (const sessionId of workspace.sessionIds ?? []) index.set(String(sessionId), { path: String(workspace.path) });
+            for (const sessionId of workspace.sessionIds ?? []) {
+              index.set(String(sessionId), { path: String(workspace.path), title: typeof workspace.title === 'string' ? workspace.title : '' });
+            }
           }
           return index;
         } catch { return undefined; }

@@ -982,14 +982,16 @@ export async function startHost(initialSource, settings = DEFAULT_HOST_SETTINGS,
    * credential cannot work any more, so the honest state is "not authenticated, sign-in
    * required" instead of a timer that will fail forever.
    */
-  async function requireSignIn(message) {
+  async function requireSignIn(message, dropIdentity = false) {
     active = false;
     cancelReconnect();
     await disconnect({ keepSwitch: true, preserveExports: true });
     // A removed device is only recoverable with a NEW handle: signing in again with the
     // stored one is refused the same way. Drop it, then let the settings update restart
     // this runtime with nothing to read and the sign-in form in front of the user.
-    try { await options.resetIdentity?.(); } catch { /* the card still shows sign-in */ }
+    if (dropIdentity) {
+      try { await options.resetIdentity?.(); } catch { /* the card still shows sign-in */ }
+    }
     status.setLogin({ authenticated: false, required: true });
     status.setState('disconnected', `${message}，请重新登录 Cindy`);
   }
@@ -2731,7 +2733,10 @@ export async function startHost(initialSource, settings = DEFAULT_HOST_SETTINGS,
       if (myGeneration !== generation || !active) return;
       const note = String(reason ?? '').trim();
       if (isRelaySignInClose(code)) {
-        void requireSignIn(note || (code === 4410 ? '设备已从 Cindy 账号移除' : 'Cindy 登录已失效')).then(() => undefined, () => undefined);
+        // 4410 means the account no longer knows this device: the stored handle is
+        // dead and must be dropped. 4401 is just an expired token — the device is
+        // still paired, so keep its handle and only ask for a fresh sign-in.
+        void requireSignIn(note || (code === 4410 ? '设备已从 Cindy 账号移除' : 'Cindy 登录已失效'), code === 4410).then(() => undefined, () => undefined);
         return;
       }
       void dropAndRetry('与 Cindy relay 的连接已断开' + (Number.isInteger(code) && code !== 1000 && code !== 1005 ? `（${code}）` : '')).then(() => undefined, () => undefined);

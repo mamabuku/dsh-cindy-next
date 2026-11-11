@@ -74,16 +74,20 @@ export function createDshProjectAliases({ getRegistry, getOwner, subscribeChange
       let projectKey;
       try { projectKey = projectOrderKey(row.path); } catch { continue; } // relative / unkeyable path: skip, never guess
       if (seen.has(projectKey)) continue; // ambiguous grouping: first registered wins, the rest are dropped
+      seen.add(projectKey); // reserve the key before deciding on the title
       const alias = displayTitle(row.title);
       if (alias === '') continue; // no human title: the controller's own basename fallback is correct
-      seen.add(projectKey);
       aliases.push({ projectKey, alias });
       const updatedAt = row.updatedAt instanceof Date ? row.updatedAt.toISOString() : (typeof row.updatedAt === 'string' ? row.updatedAt : null);
       list.push({ projectKey, alias, updatedAt });
     }
     // Sessions in no Workspace are shown as one 「未分组」 project, like the sidebar.
     const unfiledKey = projectOrderKey(UNFILED_PROJECT_PATH);
-    if (!seen.has(unfiledKey)) aliases.push({ projectKey: unfiledKey, alias: "未分组" });
+    if (!seen.has(unfiledKey)) {
+      seen.add(unfiledKey);
+      aliases.push({ projectKey: unfiledKey, alias: "未分组" });
+      list.push({ projectKey: unfiledKey, alias: "未分组", updatedAt: null });
+    }
     const owner = getOwner?.();
     const ownerStamp = owner && typeof owner.dataOwnerId === 'string' && owner.dataOwnerId !== '' && Number.isSafeInteger(owner.ownerGeneration) && owner.ownerGeneration >= 0
       ? { dataOwnerId: owner.dataOwnerId, ownerGeneration: owner.ownerGeneration }

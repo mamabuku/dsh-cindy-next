@@ -21,7 +21,10 @@
 
 /** Activity kinds the projection's allowlist accepts (see `contracts.js`). */
 /** The pseudo-project the DSH sidebar calls 「未分组」: sessions in no Workspace. */
-export const UNFILED_PROJECT_PATH = '/__dsh_unfiled__';
+export const UNFILED_PROJECT_PATH = '/未分组';
+/** Display-only path prefix: `/<prefix>/<title>` gives the controller a readable
+ * project name even when the real directory is `ai-briefs` or a UUID. */
+export const PROJECT_DISPLAY_PREFIX = '/__dsh_project__';
 
 function activity(kind, sessionId, phase, extra = {}) {
   return { kind, sessionId: String(sessionId), sequence: 0, phase, ...extra };
@@ -412,14 +415,23 @@ export function createSessionControllerSource({
       if (index instanceof Map && index.size > 0) {
         for (const row of rows) {
           const owner = index.get(row.id);
-          row.cwd = owner ? owner.path : UNFILED_PROJECT_PATH;
+          if (owner) {
+            // The real path stays authoritative for every path consumer; only the
+            // grouping path carries the display name.
+            if (!row.cwd) row.cwd = owner.path;
+            const name = typeof owner.title === 'string' && owner.title.trim() !== '' ? owner.title.trim() : null;
+            row.projectDir = name ? `${PROJECT_DISPLAY_PREFIX}/${name.replace(/[\\/]+/g, ' ')}` : owner.path;
+          } else {
+            row.cwd = UNFILED_PROJECT_PATH;
+            row.projectDir = UNFILED_PROJECT_PATH;
+          }
         }
       } else {
         let workspacePaths;
         try { workspacePaths = getWorkspacePaths?.(); } catch { workspacePaths = undefined; }
         if (workspacePaths instanceof Set && workspacePaths.size > 0) {
           const allowed = new Set([...workspacePaths].map((value) => String(value).replace(/[\\/]+$/, '')));
-          rows.splice(0, rows.length, ...rows.filter((row) => !row.cwd || allowed.has(String(row.cwd).replace(/[\\/]+$/, ''))));
+          return rows.filter((row) => !row.cwd || allowed.has(String(row.cwd).replace(/[\\/]+$/, '')));
         }
       }
       // A current sessionQuery title reader is the authority for sidebar discovery.

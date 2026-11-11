@@ -1571,7 +1571,9 @@ export function createChannelRouter({
     // Approvals. The questions are DSH's own pending `approval/request`s, routed
     // here only while a controller is watching the asking session.
     if (channel === 'sidebar-settings:get-project-aliases' || channel === 'local-db:project-aliases:list') {
-      if (args.length !== 0) return invokeError(request, 'BAD_REQUEST', 'Invalid project-alias argument count');
+      // The desktop family sends a filter object on some builds; both channels are
+      // pure reads, so anything beyond the arguments is ignored rather than refused.
+      if (args.length > 1) return invokeError(request, 'BAD_REQUEST', 'Invalid project-alias argument count');
       const port = capabilitiesNow().projectAliases;
       // A Host that cannot name its Workspaces is not an error for the phone: it
       // already falls back to the folder basename. Answer the empty shape, don't refuse.

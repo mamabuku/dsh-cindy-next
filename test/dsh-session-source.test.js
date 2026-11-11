@@ -580,3 +580,40 @@ test('sidebar discovery shows only sessions that live in a registered Workspace'
   const direct = await source.getSession?.('scratch');
   assert.ok(direct === undefined || direct.id === 'scratch');
 });
+
+test('workspace ownership decides the project, even when the summary lost its cwd', async () => {
+  const items = [
+    { sessionId: 'owned', updatedAt: 1_700_000_000_000, running: false, blank: false },
+    { sessionId: 'owned-sub', updatedAt: 1_700_000_001_000, running: false, blank: false, cwd: '/projects/finance/sub' },
+    { sessionId: 'loose', updatedAt: 1_700_000_002_000, running: false, blank: false, cwd: '/tmp/scratch' },
+  ];
+  const source = createSessionControllerSource({
+    sessionController: makeController(items),
+    subscribe: makeSubscribe(),
+    getWorkspaceIndex: () => new Map([
+      ['owned', { path: '/projects/finance' }],
+      ['owned-sub', { path: '/projects/finance' }],
+    ]),
+  });
+  const rows = await source.listSessions();
+  assert.deepEqual(rows.map((row) => [row.id, row.cwd, row.projectDir]), [
+    ['owned', '/projects/finance', '/projects/finance'],
+    ['owned-sub', '/projects/finance/sub', '/projects/finance'],
+    ['loose', '/未分组', '/未分组'],
+  ]);
+});
+
+test('direct lookup keeps the real working directory, not the project bucket', async () => {
+  const source = createSessionControllerSource({
+    sessionController: {
+      async list() { return { items: [{ sessionId: 's1', updatedAt: 1_700_000_000_000, running: false, blank: false, cwd: '/projects/finance/sub/deep' }] }; },
+    },
+    subscribe: makeSubscribe(),
+    getWorkspaceIndex: () => new Map([['s1', { path: '/projects/finance' }]]),
+  });
+  const [listed] = await source.listSessions();
+  assert.equal(listed.cwd, '/projects/finance/sub/deep', 'the real working directory is preserved');
+  assert.equal(listed.projectDir, '/projects/finance', 'only the grouping path carries the project');
+  const direct = await source.getSession?.('s1');
+  assert.equal(direct?.cwd, '/projects/finance/sub/deep', 'a direct read still reports the real cwd');
+});
