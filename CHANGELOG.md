@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.8 — 2026-11-11 (dsh-cindy-next)
+
+- The phone's project list now matches the DSH sidebar: sidebar discovery only lists sessions that live in a registered Workspace, so agent scratch directories and one-off temp folders no longer appear as phantom projects. `getSession` still answers any session id, so opening a session directly is unaffected.
+
 ## 0.1.7 — 2026-11-11 (dsh-cindy-next)
 
 - Settings page polish after review: row titles 15px, the account row shows kind + masked identifier instead of a bare `***`, the switch uses the platform's dark on-state, and the save/delete buttons follow the platform's filled pill shape.

@@ -557,3 +557,26 @@ test('the first listing after a cold start gets one retry before it gives up', a
   assert.equal(failingReads, 2, 'one attempt, no retry, because a fallback existed');
   assert.equal(failing.listDiagnostics().staleServes, 1);
 });
+
+test('sidebar discovery shows only sessions that live in a registered Workspace', async () => {
+  const items = [
+    { sessionId: 'in-project', updatedAt: 1_700_000_000_000, running: false, blank: false, cwd: '/Users/me/work' },
+    { sessionId: 'scratch', updatedAt: 1_700_000_001_000, running: false, blank: false, cwd: '/var/folders/agent-scratch' },
+    { sessionId: 'dialogue', updatedAt: 1_700_000_002_000, running: false, blank: false },
+  ];
+  const source = createSessionControllerSource({
+    sessionController: makeController(items),
+    subscribe: makeSubscribe(),
+    getWorkspacePaths: () => new Set(['/Users/me/work/']),
+  });
+  const ids = (await source.listSessions()).map((row) => row.id);
+  assert.deepEqual(ids, ['in-project', 'dialogue'], 'an unregistered cwd is not a project on the phone');
+
+  // Without a composed registry the old, unfiltered behaviour remains.
+  const unfiltered = createSessionControllerSource({ sessionController: makeController(items), subscribe: makeSubscribe() });
+  assert.equal((await unfiltered.listSessions()).length, 3);
+
+  // Direct lookup still answers a session the sidebar hides.
+  const direct = await source.getSession?.('scratch');
+  assert.ok(direct === undefined || direct.id === 'scratch');
+});

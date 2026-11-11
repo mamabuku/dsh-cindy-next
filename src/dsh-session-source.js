@@ -60,6 +60,11 @@ export function createSessionControllerSource({
   readActivityEvidence,
   readSessionSummary,
   readActiveSessions,
+  // The registered Workspace paths, or undefined when the registry is not composed.
+  // The controller's sidebar groups by working directory, so without this a session
+  // whose cwd is not a real DSH project (agent scratch dirs, one-off temp folders)
+  // appears as a phantom "project" the user never created and cannot see in DSH.
+  getWorkspacePaths,
   listTimeoutMs = 15_000,
   // How old a listing may be when it is served in place of one that failed. Long enough to
   // cover a cold start, short enough that a session created or renamed in the meantime is not
@@ -391,6 +396,15 @@ export function createSessionControllerSource({
     },
     async listSessions() {
       const rows = await projectItems(await listItems());
+      // Sidebar discovery must match DSH's own sidebar: only sessions that live in a
+      // registered Workspace are projects. `getSession` still answers any id, so a
+      // session opened from a link is not lost by this filter.
+      let workspacePaths;
+      try { workspacePaths = getWorkspacePaths?.(); } catch { workspacePaths = undefined; }
+      if (workspacePaths instanceof Set && workspacePaths.size > 0) {
+        const allowed = new Set([...workspacePaths].map((value) => String(value).replace(/[\\/]+$/, '')));
+        rows.splice(0, rows.length, ...rows.filter((row) => !row.cwd || allowed.has(String(row.cwd).replace(/[\\/]+$/, ''))));
+      }
       // A current sessionQuery title reader is the authority for sidebar discovery.
       // Hide rows that have never produced a real title; exact getSession remains
       // available for a freshly created draft before its first prompt names it.
