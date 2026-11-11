@@ -1913,6 +1913,9 @@ export function apply(ctx, config) {
         inputDeliveryDirectory: join(process.env.DSH_PROFILE_DIR || join(process.env.DSH_HOME || join(homedir(), '.dsh'), 'profiles', process.env.DSH_PROFILE || 'desktop'), 'state', 'dsh-cindy-host'),
 
         identityIsCurrent: () => admitted || (!runtimeDisposed && lease()),
+        // The relay refused this device for good (4410/4401): drop the stored handle so
+        // the next sign-in registers a new one instead of repeating the refusal.
+        resetIdentity: () => routes?.resetDeviceIdentity?.(),
       });
       if (runtimeDisposed || !lease()) { await next.stop(); return; }
       runtime = next; admitted = true;

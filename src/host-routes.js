@@ -149,6 +149,25 @@ export function createHostRoutes({ getRuntime, getDiagnostics, getSettings, reme
     finally { pendingDeviceId = null; }
   }
 
+  /**
+   * Forget a device identity the relay will never accept again.
+   *
+   * The relay answers a removed device with `4410 device removed; sign in again to
+   * register`, and every later connection reuses the same stored handle — so signing in
+   * again alone repeats the failure. Clearing the credential AND the remembered id makes
+   * the next login mint a fresh handle that the relay registers as a new device.
+   */
+  async function resetDeviceIdentity() {
+    identityEpoch += 1;
+    await loginFlow.stop();
+    await forgetCredential().catch(() => {});
+    fallbackDeviceId = null;
+    pendingDeviceId = null;
+    if (typeof rememberDeviceId === 'function') {
+      try { await rememberDeviceId(''); } catch { /* settings write failure must not block the reset */ }
+    }
+  }
+
   /** Why the Host has (or has not) any data to serve — cheap, and only for diagnosis. */
   function diagnostics() {
     if (typeof getDiagnostics !== 'function') return undefined;
@@ -317,5 +336,5 @@ export function createHostRoutes({ getRuntime, getDiagnostics, getSettings, reme
     }
   }
 
-  return { handle, API_PREFIX, async dispose() { disposed = true; identityEpoch++; await loginFlow.dispose(); await identityWrites.catch(() => {}); } };
+  return { handle, API_PREFIX, resetDeviceIdentity, async dispose() { disposed = true; identityEpoch++; await loginFlow.dispose(); await identityWrites.catch(() => {}); } };
 }

@@ -986,6 +986,10 @@ export async function startHost(initialSource, settings = DEFAULT_HOST_SETTINGS,
     active = false;
     cancelReconnect();
     await disconnect({ keepSwitch: true, preserveExports: true });
+    // A removed device is only recoverable with a NEW handle: signing in again with the
+    // stored one is refused the same way. Drop it, then let the settings update restart
+    // this runtime with nothing to read and the sign-in form in front of the user.
+    try { await options.resetIdentity?.(); } catch { /* the card still shows sign-in */ }
     status.setLogin({ authenticated: false, required: true });
     status.setState('disconnected', `${message}，请重新登录 Cindy`);
   }

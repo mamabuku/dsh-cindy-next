@@ -167,3 +167,18 @@ test('a handler failure becomes a 500 rather than an unhandled rejection', async
   assert.equal(response.statusCode, 500);
   assert.equal(response.body.ok, false);
 });
+
+test('a device the relay refused is forgotten so the next sign-in registers a new one', async () => {
+  const remembered = [];
+  let forgotten = 0;
+  const routes = createHostRoutes({
+    getRuntime: () => undefined,
+    getSettings: () => ({ deviceId: 'removed-device' }),
+    rememberDeviceId: async (value) => { remembered.push(value); },
+    auth: { forgetSession: async () => { forgotten += 1; } },
+  });
+  assert.equal(typeof routes.resetDeviceIdentity, 'function');
+  await routes.resetDeviceIdentity();
+  assert.equal(forgotten, 1, 'the refused credential is cleared');
+  assert.deepEqual(remembered, [''], 'the stored device handle is forgotten, not reused');
+});

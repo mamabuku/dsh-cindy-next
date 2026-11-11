@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.5 — 2026-11-11 (dsh-cindy-next)
+
+- Make a removed device recoverable. The relay refuses `4410` with `device removed; sign in again to register`, but every later sign-in reused the same stored device handle (`hostDeviceId` prefers the credential, then the remembered id), so signing in again repeated the refusal. On `4410/4401` the runtime now drops both the credential and the remembered handle (`resetDeviceIdentity`) before showing the sign-in form, so the next login registers a fresh device.
+- Ordinary disconnects keep their retry ladder unchanged.
+
 ## 0.1.4 — 2026-11-11 (dsh-cindy-next)
 
 - Stop hiding an unfixable relay refusal behind a reconnect timer. The relay closes a removed device with `4410` (`device removed; sign in again to register`) and a dead token with `4401`; both are now surfaced as 「设备已从账号移除，请重新登录」 in the Settings card with the sign-in form, instead of `正在重连（第 N 次）` forever. Ordinary socket losses still retry, and the close code is appended to the retry message when there is one.
