@@ -1,0 +1,74 @@
+# dependencies
+node_modules/
+.release/
+*.log
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+
+# the sandbox DSH home: it carries its own credentials and session storage
+.sandbox/
+
+# claw runtime state: the daemon's logs, runtime dir and sqlite memory are binary,
+# churning and machine-local. The project memory itself (.claw/project.json,
+# .claw/adr, .claw/truth) is committed — see the claw-kit block below.
+.claw/runtime/
+.claw/logs/
+.claw/memory.sqlite
+.claw/memory.sqlite-shm
+.claw/memory.sqlite-wal
+
+# crash reports and one-off probe leftovers at the repository root
+.claw-crash-report/
+.claw-*.txt
+.claw-*.log
+.claw-*.report
+.claw-*.mjs
+.claw-*.cjs
+
+# media produced by agent sessions (acceptance prefers kitten.png but falls back)
+kitten.png
+generated-*.png
+
+# acceptance output, kept on disk so a run that kills the process still leaves its log
+acceptance-run.log
+acceptance-*.log
+
+# editor / OS noise
+.DS_Store
+Thumbs.db
+*.tmp
+
+# npm pack 产物（构建物，不入库）
+*.tgz
+.gitnexus
+
+# 本地打出来的安装包与探针产物（77MB 级二进制，绝不入库）
+artifacts/
+
+# Local release validation may contain private profiles and credentials.
+.release/
+
+# claw-kit 会逐字检查下面这 6 行（首行就是 "# claw-kit"），缺了它就再追加一份，
+# 而追加的那份会把 .claw 重新变成"全部忽略"（2026-10-31 发生过一次）。
+# 所以：块本身一个字符都不许改，本项目的策略写在块之后。
+# claw-kit
+.claw/*
+!.claw/project.json
+!.claw/truth/
+!.claw/truth/**
+.claw/project-override.json
+
+# 本项目的策略，必须写在上面的块之后（gitignore 末条匹配生效）：
+# .claw 是随代码入库的项目记忆（见 doc/releasing.md），只有任务账本和
+# 机器本地状态不入库。
+!.claw/
+!.claw/**
+.claw/tasks/
+.claw/archive/tasks/
+.claw/project-override.json
+.claw/runtime/
+.claw/logs/
+.claw/memory.sqlite
+.claw/memory.sqlite-shm
+.claw/memory.sqlite-wal

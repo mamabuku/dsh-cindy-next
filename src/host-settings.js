@@ -1,0 +1,71 @@
+export const SETTINGS_NAMESPACE = 'dsh-cindy-host';
+
+// Network access is opt-in. A newly mounted bundle only projects local DSH data.
+//
+// Controller-only delete/pin metadata and legacy archive flags survive restart.
+// New archive/unarchive operations persist in DSH's native workspace registry;
+// legacy archived flags are retained until explicitly retired (see `session-flags.js`).
+export const DEFAULT_HOST_SETTINGS = Object.freeze({ transportEnabled: false, remoteControlEnabled: false, controllers: {}, deviceId: '', deviceName: '', sessionFlags: {}, diagnosticPresentationV1: {} });
+
+/**
+ * The Host's own relay identity, when it has one.
+ *
+ * It is stored here rather than derived from the credential because the credential
+ * can legitimately disappear — an expired token, a fresh install, or (as happened
+ * once) a refresh failure that used to delete it — while the identity is what a
+ * phone linked to. Losing the credential must not silently re-pair the Host as a
+ * different device.
+ * @param value - the settings section.
+ * @returns the device id, or an empty string when none was ever recorded.
+ */
+export function rememberedDeviceId(value) {
+  return typeof value?.deviceId === 'string' ? value.deviceId.trim() : '';
+}
+
+export const DEFAULT_HOST_DEVICE_NAME = 'DSH Host';
+export const MAX_HOST_DEVICE_NAME_LENGTH = 64;
+
+/** Empty is the legacy/default sentinel; explicit names are single-line labels. */
+export function validateHostDeviceName(value) {
+  if (typeof value !== 'string' || /[\u0000-\u001f\u007f-\u009f]/.test(value) ||
+      (value !== '' && (!value.trim() || value.trim().length > MAX_HOST_DEVICE_NAME_LENGTH))) {
+    throw new Error('Invalid DSH Cindy Host device name');
+  }
+}
+
+export function hostDeviceName(settings) {
+  return (typeof settings?.deviceName === 'string' && settings.deviceName.trim()) || DEFAULT_HOST_DEVICE_NAME;
+}
+
+export function validateHostSettings(value) {
+  if (!value || typeof value !== 'object' || typeof value.transportEnabled !== 'boolean' || typeof value.remoteControlEnabled !== 'boolean' || !value.controllers || typeof value.controllers !== 'object') throw new Error('Invalid DSH Cindy Host settings');
+  if (value.deviceId !== undefined && typeof value.deviceId !== 'string') throw new Error('Invalid DSH Cindy Host settings');
+  if (value.deviceName !== undefined) validateHostDeviceName(value.deviceName);
+  for (const [id, entry] of Object.entries(value.controllers)) {
+    if (!id || !entry || !['authorized', 'revoked'].includes(entry.state)) throw new Error('Invalid controller authorization');
+  }
+  // An absent section is valid — every settings file written before this field
+  // existed has none, and rejecting it would fail the load instead of the flag.
+  if (value.diagnosticPresentationV1 !== undefined) {
+    const record = entry => entry !== null && typeof entry === 'object' && !Array.isArray(entry);
+    const data=value.diagnosticPresentationV1;
+    if(!record(data))throw new Error('Invalid diagnostic presentation preferences');
+    for(const sessions of Object.values(data)){
+      if(!record(sessions))throw new Error('Invalid diagnostic owner preferences');
+      for(const kinds of Object.values(sessions)){
+        if(!record(kinds))throw new Error('Invalid diagnostic session preferences');
+        for(const [kind,ids] of Object.entries(kinds)){
+          if(!['errors','interruptions'].includes(kind)||!record(ids)||Object.values(ids).some(flag=>typeof flag!=='boolean'))throw new Error('Invalid diagnostic dismissal preferences');
+        }
+      }
+    }
+  }
+  if (value.sessionFlags !== undefined) {
+    if (value.sessionFlags === null || typeof value.sessionFlags !== 'object') throw new Error('Invalid session flags');
+    for (const [sessionId, flags] of Object.entries(value.sessionFlags)) {
+      if (sessionId === '' || flags === null || typeof flags !== 'object') throw new Error('Invalid session flags');
+      if (flags.status !== undefined && !['active', 'archived', 'deleted'].includes(flags.status)) throw new Error('Invalid session status flag');
+      if (flags.pinnedAt !== undefined && typeof flags.pinnedAt !== 'string') throw new Error('Invalid session pin flag');
+    }
+  }
+}

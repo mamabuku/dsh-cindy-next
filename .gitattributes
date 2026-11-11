@@ -1,0 +1,13 @@
+# Normalize line endings in the repository; the working tree keeps whatever the
+# platform uses. These files are binary or would be mangled by text conversion.
+* text=auto eol=lf
+# Windows checkouts of an LF repository should not churn every file's endings.
+
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.webp binary
+*.zstd binary
+*.sqlite binary
+*.sqlite-shm binary
+*.sqlite-wal binary

@@ -1,0 +1,159 @@
+# Verification and projection exclusion rules
+
+<!-- state: current -->
+## Current behavior
+
+The whole suite runs with `node --test` (`npm test`) on Node 22 or newer. Release 0.1.21 (maintained sibling worktree `../DSH-cindy-host-020`, commit `8699b61`) was verified with **759 passing / 1 skipped / 0 failed** out of 760 runner entries, with `CINDY_SOURCE_ROOT` set so the real Cindy consumer regression ran. The DeviceLink audit reported **54 served / 142 deliberately declined / 0 unclassified** (`npm run audit:channels`). These counts are evidence for that release, not timeless constants: future changes must record fresh command output rather than copying this paragraph.
+
+### Current native-adaptation verification boundary
+
+For ongoing Cindy phone/protocol adaptation, modify and test only this Host. Cindy source is read-only schema/consumer reference: do not modify it, copy it into executable fixtures, import/execute its consumer code or run Cindy tests. Write Host-owned wire assertions from the referenced contract. Run only directly affected Host tests; a repository-wide run requires explicit user authorization, not an automatic per-slice or smoke prerequisite. Historical consumer/full-suite procedures below describe prior release evidence and do not override this boundary.
+
+The [2026-11-03 native-subset delivery record](<../../doc/native-capability-adaptation-20261103.md#L41-L57>) reports targeted adapters, source composition, affected delivery/routes and lifecycle checks, plus a read-only channel audit of 72 served / 124 declined / 0 unclassified and 12 classified pushes. The [lifecycle suite](<../../test/native-capability-lifecycle.test.js>) covers source replacement, account boundary, socket-close cancellation, stale callbacks and one-peer isolation. No tests were rerun during knowledge maintenance; these are recorded implementation results, not a fresh full-suite pass, actual profile service-mount confirmation or handset certification.
+
+A pre-restriction full-suite run had a logout assertion difference (expected invalidate/clear/disconnect, actual included set-login) in [Host export integration](<../../test/host-export-integration.test.js>). Its current pass/fail and attribution are not established by this adaptation. Preserve it as historical evidence rather than silently changing expectations or claiming the whole repository green. Early copied/executed Cindy validation added by that work was withdrawn; existing unrelated/parallel tests and reasoning/authentication work were not counted as native-adaptation deliverables.
+
+Publication, plugin reload, actual mounted services and preset-specific compact, phone forms and real-data operations remain separately authorized deployment acceptance. Do not create real reminders, compact/fork sessions or reorder actual workspaces merely to certify this documentation. Current implementation scope is owned by [protocol Truth](<dsh-cindy-host-device-link-protocol.md>) and [ADR 0019](<adr/0019-native-capability-subset-boundary.md>).
+
+### Cross-client evidence and deployment identity
+
+The model projection semantics have one owner: [new-conversation runtime](<dsh-cindy-host-new-session-runtime.md>). Historical cross-client release evidence verified producer and consumer together; the current read-only/Host-only boundary above governs new work:
+
+- Pin the actual worktree, installed package path, and running process separately. In the 0.1.21 incident the original workspace was older than the maintained release worktree; replacing the installed package from the old tree would discard newer fixes.
+- The historical model regression used real Host wire output as input to actual Cindy consumer code rather than idealized fixtures. It ran with `CINDY_SOURCE_ROOT=<Cindy checkout> node --test test/host-models-cindy-contract.test.js` in the maintained worktree (Node with registerHooks/native TypeScript stripping). Check new and existing sessions, aliases, duplicate model IDs across providers, unavailable providers, missing/disabled runtime markers, absent optional metadata, and read failures.
+- After installation and restart, inspect only the required fields of `POST /api/dsh-cindy-host/selftest` read channels. The 0.1.21 runtime returned two providers/seven models; feeding those actual responses to Cindy's shared registry/unified picker yielded seven draft and session rows. These are incident measurements, not fixed expected model counts.
+- Default-model text, nonempty capability metadata, passing unit tests, package installation, and UI success are different evidence layers. Never promote any one into proof of all others. Model-list validation does not certify skills, commands, or every desktop/mobile feature.
+- Publishing evidence for 0.1.21: npm latest and v0.1.21 pointed to commit `8699b61`; registry SHA1 matched `c1e02cde7051c673e7a219267188f5495d3dbb64`. Tarball and registry installations into separate clean DSH 0.1.5-rc.2 profiles mounted successfully; the registry-installed authenticated page returned 200 with boot/plugin entries, without profile-local DSH packages. The desktop's locally patched module matched the release module; this does not assert that its package metadata was upgraded by publishing.
+- Full-profile restart is not implicit in a code edit or release. For 0.1.23, installation/version/hash were confirmed but the installer timed out after pnpm completion; the user deferred restart to later manual action, so live profile activation and mobile end-to-end verification remain pending. Preserve unrelated changes and stop managed smoke servers after collecting their results.
+
+What each layer must prove:
+
+- Projection and privacy: list/activity projection excludes message bodies, prompt input, credentials and file content. Session-scoped message/history, interaction and file channels read their explicit DSH owners only after DeviceLink authorization; sensitive data never rides the list projection by accident.
+- Stream recovery: a stream failure emits a generic stale marker (never raw error
+  text) and refreshes the conversation baseline, with no duplicate rebaseline while
+  one is in flight.
+- Runtime: relay frames, the 20 s heartbeat, state derivation, revoke handling, and
+  the switch-off teardown in `test/host.test.js`, `test/host-status.test.js`, and
+  `test/authorization-policy.test.js`.
+- Login: identifier validation and the `ok` / nested-token / `select_account` /
+  `binding_required` / `sso_verification_required` outcome mapping in
+  `test/cindy-login-flow.test.js`.
+- HTTP surface: loopback-only `403`, status shapes, unknown-route `404`,
+  runtime-not-ready `503`, body limits (`413`/`400`), and the handler-failure `500` in
+  `test/host-routes.test.js`.
+- Card: `test/client-card.test.js` renders the `settings.section` page with React, verifies dual-generation non-blocking settings binding, and pins the client ModuleLoader id to `dsh-cindy-host`.
+- Bundle and composition: the npm package, lockfile, Cordis bundle name, Web ModuleLoader id and installed Profile must all be exactly `dsh-cindy-host`; the old `dsh-cindy-host-demo` may exist only as deprecated registry/history evidence. `test/dsh-plugin.test.js` and `test/host-settings.test.js`
+  cover mounting and settings validation; the isolated smoke test covers composition
+  and lifecycle only, and is not a projection test.
+- Media fetch: `test/host-media-fetch.test.js` covers downsample success, the
+  input/product-over-limit fallbacks, non-downsamplable mime types, the small-original
+  inline fallback, and the staging cache; `tools/acceptance.mjs` checks live that a
+  `thumbnail: true` fetch answers either inline bytes or a key with a well-formed shape
+  (including the base64 length and the 700 KiB ceiling).
+- History view: `test/host-history-view.test.js` covers work grouping and the
+  page/detail cursor semantics (`hasMore`/`nextCursor`); `test/cindy-channels.test.js`
+  and `test/cindy-channels-fail-closed.test.js` cover channel-layer forwarding and
+  fail-closed refusals; `tools/acceptance.mjs` checks a live view page, a
+  `work-details` range, and `view-intent` accepting an expanded set. Both are only
+  meaningful on a process restarted after the channels landed.
+- Session metadata deletion: `test/cindy-channels.test.js` covers missing/repeated
+  delete acknowledgements, persisted fields, persistence/read failures, the effective
+  deleted-status condition, and unchanged `NOT_FOUND` behavior for missing-session
+  non-delete or mixed patches.
+
+Verification rules:
+
+- The historical release smoke procedure used a clean `npm test` run as its entry gate. For current adaptation, use only affected Host tests; obtain explicit authorization before a full-suite run or release/smoke expansion.
+- Gate 1: `dsh --profile cindy-smoke --dump-config` with a disposable `DSH_HOME`
+  must compose the bundle.
+- Gate 2: `dsh --profile cindy-smoke --no-open --port 3081` must show a running host
+  with no Cindy authentication prompt; the card bundle is the `dsh-cindy-host` entry of `window.__DSH_BOOT__`.
+- **The clean-install gate is one gate, and it must prove loading.** It is run in a
+  **brand-new `DSH_HOME`** (not the sandbox) with a profile derived from a real one
+  (`--from-default-profile web`, so it has a web server to answer on):
+  `dsh plugin --profile <new> add <tarball>` → exit 0; then assert **`profile-local
+  @deepseek-ai == 0`** (the plugin must contribute nothing to the host's module tree);
+  then `--dump-config` → exit 0 with the `dsh-cindy-host` row; then **start it and read
+  `/api/dsh-cindy-host/status` → 200 `installed=true`**.
+- **Composition is not loading.** This paragraph used to claim the second half of the
+  pair was blocked "for DSH-side reasons only", with the evidence being a failing stack
+  that named `@deepseek-ai/dsh-client-file-upload`. That conclusion was **wrong**: the
+  stack named a DSH package because *we* had installed a whole other DSH generation
+  (28 `@deepseek-ai/*@^0.1.1-rc.2` behind our `optionalDependencies` entry) into the
+  profile, and the fresh profile then composed a mixture of two generations. `0.1.2`
+  fixed it, and the same fresh-home procedure now ends in `200 installed=true`. The
+  retained rule: when a stack frame names someone else's package, first ask **where that
+  copy resolved from and which generation it is**, and never accept `--dump-config`
+  passing as evidence that an entry can load — a missing named export composes fine and
+  kills the profile at load time. See `.claw/adr/0010`.
+- Release channel: the production package is on npm as `dsh-cindy-host` (captured release 0.1.21). A release is verified by installing **from the channel a user would use**, into a brand-new home: for the registry that means `add dsh-cindy-host@<version>` with no local path, then
+  `profile-local @deepseek-ai == 0`, then a real start and a `/status` read. Reading the
+  version back with `npm view` is part of it, and a `404` in the first minute after
+  publishing is replication lag, not a failed publish.
+  0.1.1 was a **GitHub Release tarball** instead (`v0.1.1` + `dsh-cindy-host-demo-0.1.1.tgz`)
+  and its asset is defective — kept as history, never to be installed.
+- Live endpoint check on that port: `GET /api/dsh-cindy-host/status` → `200`, an
+  unknown route → `404`, `POST …/login/request-code` with an empty identifier → `400`.
+- Switch-off proof: after turning the switch off, status returns `disconnected`,
+  device ledger and host identity are cleared, and the process holds 0 established
+  sockets.
+- Browser automation of the card's polling/login interaction is not available in this
+  checkout; that interaction is covered by the React render tests plus the live
+  `status` endpoint.
+- Restart rule: a change that adds a channel or a `link-accept` capability is only
+  verifiable after `dsh web` is restarted. Until then the old process answers
+  `CHANNEL_NOT_ALLOWED` for the new channel and advertises no new capability, so an
+  acceptance run against the old process proves nothing about the change.
+
+Code anchors:
+
+- `test/*.test.js` (41 files; the media-fetch and history-view suites are named above)
+- `src/projection.js`, `src/contracts.js`, `src/projection-read-model-sink.js`,
+  `src/session-publisher.js`, `src/session-read-model.js`
+- `README.md` ("Safe isolated DSH smoke test", 「安装要求：需要编译原生模块」)
+- `tools/acceptance.mjs`, `tools/channel-audit.mjs` (`npm run audit:channels`)
+- `doc/publishing.md` (§5.1–§5.5: the clean-install traps, the install requirement, the
+  tarball re-install trap, the DSH-side fresh-profile failure, and the 0.1.1 release
+  channel)
+- `doc/cindy-phone-link.md` ("Verifying by hand"; 「收尾：媒体取件补齐 + 历史视图通道」；
+  「真机复测清单（累计）」)
+
+<!-- state: history -->
+## Evolution history
+
+<!-- dated: 2026-11-03 -->
+### Verification narrowed to Host-owned targeted contracts
+
+Earlier adaptation slices repeatedly ran the full suite and executed copied/reference Cindy consumer code. The clarified boundary withdrew that newly added validation and replaced it with Host-owned protocol assertions against read-only source, affected-module tests and read-only audits. This supersedes the earlier unconditional full-suite/consumer-execution recipe for ongoing phone adaptation; it does not erase historical release evidence or claim that the observed logout assertion difference has been fixed.
+
+<!-- dated: 2026-09-17 -->
+### 文档断言的复核
+
+一次独立复核用了比会话默认更强的模型（`deepseek-official / deepseek-v4-pro`），三个 reviewer 并行、
+各自只读，分工是：新增四节 vs 源码与测试、两处「已被推翻」表述的横向一致性、发布文档 vs 可验证的
+客观事实（`package.json`、`npm pack --dry-run`、`git tag`、`gh release view`、各数字断言实际跑出来）。
+每个 reviewer 的立场是**怀疑**：找不到证据的算 unsupported，与代码相反的算 contradicted，两者都必须
+给出 `文件:行号` 或命令输出。
+
+结果值得记下来，因为**错误的类型比数量更有信息量**：
+
+| 类型 | 实例 |
+|---|---|
+| 把只在一个方向成立的行为写成通例 | 「运行中的卡片永远是最后一行」——`mergePendingByTime` 的 `runsNow` 带 `!newestFirst` 前提，新到旧的列表不重排 |
+| 把两处代码的功劳写在一起 | `pulseRepair` 补的是输入投影 + 视图失效；turn 状态是 `markDeviceReachable` 补的 |
+| 计数口径写错 | 用 `recentPushes[].watchers` 判断「推送还在发」——那个数是 `recordPush` 收到的**可达数**，`offlineDevices` 会让它变 0 |
+| 陈旧数字 | README「407 项」vs 实测 446；`doc/cindy-phone-link.md`「48 served / 144 declined」vs 实测 52 / 140 |
+| 与实现相反的注释 | `src/host.js` 5 处仍写「订阅会因 presence 离线被删」 |
+| 断链 | CHANGELOG 的 `[0.1.0]` 指向不存在的 release，`[0.1.1]` 没有链接定义 |
+
+**留下的规则**：文档里每一句关于行为的断言都要能落到「文件:行号」或一条可跑的命令；不能这样落地的
+（例如鸿蒙那条 OS 侧观测）必须**明确标注**为真机观测、并指向留存的记录，不能让读者以为它可以
+从代码验出来。数字类断言一律**实际跑命令**再写，不引用文档里另一处的说法。
+
+仍然无法在仓库内验证的：那条 OS 侧读方向失效本身（只有一次真人实测的留存记录），以及各文档中未被
+本次覆盖的章节（`doc/publishing.md` §1/§2/§4/§6、README 其余数字、CHANGELOG 历史条目、
+`doc/cindy-phone-link.md` 前四节）。
+
+Code anchors:
+
+- `.claw/truth/dsh-cindy-host-mobile-resume-limitation.md`（那条 OS 侧观测的留存记录）

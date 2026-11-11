@@ -1,0 +1,2157 @@
+import Schema from '@deepseek-ai/schemastery';
+import { createRequire } from 'node:module';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
+import { createDshInputDeliveryBackend } from './dsh-input-delivery.js';
+import { diagnosticPreferenceStore } from './diagnostic-presentation.js';
+import { ensureNativeContinuationPlanOff } from './continuation-protocol.js';
+import { DEFAULT_HOST_SETTINGS, SETTINGS_NAMESPACE, validateHostSettings } from './host-settings.js';
+import { DshHostSource } from './dsh-host-source.js';
+import { createSessionControllerSource } from './dsh-session-source.js';
+import { createDshSessionArchive } from './dsh-session-archive.js';
+import { createDshManualCompact } from './dsh-manual-compact.js';
+import { createDshFork } from './dsh-fork.js';
+import { createDshKeywordSearch } from './dsh-keyword-search.js';
+import { createDshBackgroundJobs } from './dsh-background-jobs.js';
+import { createDshSubagentReads } from './dsh-subagent-reads.js';
+import { createDshReminders } from './dsh-reminders.js';
+import { createDshProjectOrder } from './dsh-project-order.js';
+import { createDshReferenceHistory } from './dsh-reference-history.js';
+import { readActiveSessionSummaries } from './dsh-active-sessions.js';
+import { createMessageCounter, createMessageReader, foldSessionEvent, isHarnessNotice, promptRpcIdOf } from './dsh-message-fold.js';
+import { createHistoryViewController } from './host-history-view.js';
+import { createFileReader } from './host-files.js';
+import { createFileBrowser } from './host-file-browser.js';
+import { createAttachmentMaterializer } from './host-attachments.js';
+import { createNativeAttachmentSourceReader } from './host-attachment-media.js';
+import { createGoalWriter } from './host-goals.js';
+import { startHost } from './host.js';
+import { refusalError } from './cindy-channels.js';
+import { enrichModelCatalog } from './host-model-catalog.js';
+import { hydrateImageAttachments } from './cindy-message-row.js';
+import { API_PREFIX, createHostRoutes } from './host-routes.js';
+import { createCredentialStore } from './credential-store.js';
+
+export const name = 'dsh-cindy-host';
+export const inject = ['settings'];
+
+/**
+ * Brand a string as a settings namespace.
+ *
+ * This used to be `import { settingsNamespace } from '@deepseek-ai/dsh-settings'`, and that import
+ * is why the plugin could not be installed on a current DSH: the helper exists in
+ * `0.1.1-rc.2` but **is not exported by `0.1.5-rc.2`** (whose surface is `SettingsProvider`,
+ * `SettingsConflictError`, `redactSecrets`, `default`). Keeping it meant declaring an old DSH
+ * generation as a dependency, and installing that generation into a profile is what broke the
+ * host's own composition (`dsh-client-file-upload` / `dsh-session` mismatch → profile will not
+ * boot). See `doc/publishing.md` §5.6.
+ *
+ * The helper is a brand, not behaviour — validate, return the string — so it lives here now and
+ * costs nothing: the namespace is the value, the pattern is the contract.
+ */
+const SETTINGS_NAMESPACE_PATTERN = /^[a-z][a-z0-9-]*$/;
+function settingsNamespace(value) {
+  if (!SETTINGS_NAMESPACE_PATTERN.test(value)) throw new TypeError(`settings namespace "${value}" must match ${String(SETTINGS_NAMESPACE_PATTERN)}`);
+  return value;
+}
+const ControllerSchema = Schema.object({ state: Schema.union(['authorized', 'revoked']), displayName: Schema.string(), grantedAt: Schema.string(), revokedAt: Schema.string(), grantRevision: Schema.natural() });
+// Legacy archive and controller-only delete/pin metadata. Native DSH owns new
+// archive writes. `pinnedAt: ''` is a remembered unpin (settings
+// reject `null`, and an absent field cannot be told apart from "never pinned").
+const SessionFlagSchema = Schema.object({ status: Schema.union(['active', 'archived', 'deleted']), pinnedAt: Schema.string() });
+
+/**
+ * This bundle's settings schema.
+ *
+ * Each field restates the matching `DEFAULT_HOST_SETTINGS` entry, so a profile that has never
+ * written a value still resolves a complete object rather than an empty one.
+ */
+const HostSettingsSchema = Schema.object({
+  transportEnabled: Schema.boolean().default(DEFAULT_HOST_SETTINGS.transportEnabled),
+  remoteControlEnabled: Schema.boolean().default(DEFAULT_HOST_SETTINGS.remoteControlEnabled),
+  controllers: Schema.dict(ControllerSchema).default({}),
+  deviceId: Schema.string().default(DEFAULT_HOST_SETTINGS.deviceId),
+  deviceName: Schema.string().default(DEFAULT_HOST_SETTINGS.deviceName),
+  sessionFlags: Schema.dict(SessionFlagSchema).default({}),
+  diagnosticPresentationV1: Schema.dict(Schema.dict(Schema.dict(Schema.dict(Schema.boolean())))).default({}),
+});
+
+/**
+ * The schema DSH projects as this entry's settings surface.
+ *
+ * DSH 0.2 reads a plugin **entry's own `Config`** (`SettingsForms.describe()`, keyed by profile
+ * entry id) and accepts a write only to a field beneath a **volatile** node, so the root is
+ * marked volatile when the running schemastery supports it: one volatile root is the exact
+ * equivalent of the namespace-wide registration that 0.2 removed (see
+ * {@link createSettingsScope}).
+ *
+ * `volatile()` is **feature-detected on purpose**: schemastery `3.18.2` — the copy DSH
+ * `0.1.5-rc.2` resolves, and still inside this bundle's declared `^3.18.1` peer range — has no
+ * such method, so calling it unconditionally would throw while this module loads and take the
+ * whole profile down. Without it the plain schema still serves the 0.1.x `settings.register`
+ * path, which does not need the marker.
+ */
+const HostSchema = typeof HostSettingsSchema.volatile === 'function' ? HostSettingsSchema.volatile() : HostSettingsSchema;
+
+/** The plugin entry's settings surface; see {@link createSettingsScope}. */
+export const Config = HostSchema;
+
+/**
+ * Services that can supply the DSH session read source, in preference order.
+ * `sessionController` is what current DSH Web mounts; `apiProxy` was removed
+ * from it, so that branch is last and optional.
+ */
+const SOURCE_SERVICES = ['sessionController', 'apiProxy'];
+
+/**
+ * The plan-mode module an agent preset mounts.
+ *
+ * This deployment does **not** compose plan mode on the host plane: the Web
+ * bundle disables the base `plan-mode` row and each preset that wants it mounts
+ * this module inside its own agent context. So the presence of the service is a
+ * per-preset fact, and the only honest places to read it are the agent's own
+ * context and the preset composition.
+ */
+const PLAN_MODE_MODULE = '@deepseek-ai/dsh-plan-mode';
+
+/** How long a preset-composition read is reused, in milliseconds. */
+const PRESET_INVENTORY_TTL_MS = 30_000;
+
+/**
+ * Build the DSH read source once its supplying service exists.
+ *
+ * Both candidates are provided by *other* plugins, so `apply` cannot read them
+ * synchronously: doing that is what left the original bundle with a permanently
+ * undefined source and an empty session list. `ctx.inject` waits for the service
+ * and re-runs on removal, which is the only correct way to consume it.
+ * @param ctx - the plugin context that owns the service.
+ * @param serviceName - which candidate became available.
+ * @returns the source and the label naming its seam.
+ */
+export function buildDshSource(ctx, serviceName, options = {}) {
+  // Production supplies the Host's guarded entry point; isolated source fixtures
+  // may own their own listener containment without constructing a whole Host.
+  const subscribe = options.subscribe ?? ((event, listener) => ctx.on(event, listener));
+  if (serviceName === 'sessionController') {
+    const sessionController = ctx.get('sessionController');
+    const sessionQuery = ctx.get('sessionQuery');
+    /**
+     * The Workspace that owns a new session's directory, or undefined.
+     *
+     * Read per call and never captured: the registry is another plugin's service and may
+     * activate after this seam is built (the same reason every other seam here resolves
+     * late). `create` is DSH's own "create or reuse" for a directory, so a known folder
+     * reuses its record and a genuinely new one is registered — which is what makes the
+     * session appear where the desk expects it.
+     */
+    async function workspaceForNewSession(cwd) {
+      if (cwd === undefined) return undefined;
+      const registry = ctx.get('workspaceRegistry');
+      if (registry === undefined || registry === null || typeof registry.create !== 'function') return undefined;
+      try {
+        const workspace = await registry.create(cwd);
+        return workspace !== null && workspace !== undefined && typeof workspace.id === 'string' && workspace.id !== ''
+          ? workspace
+          : undefined;
+      } catch {
+        // A path that cannot back a Workspace — relative, missing, a file — keeps the
+        // session creatable; it simply will not be grouped on the desk.
+        return undefined;
+      }
+    }
+    /**
+     * The optional session-control services, brought up explicitly.
+     *
+     * Cordis activates a service when something *injects* it; a plain `get` on a
+     * registered-but-idle service answers `undefined`. Reading them that way is
+     * how plan mode looked uncomposed on a profile that plainly composes it — the
+     * same trap the original `apiProxy` seam fell into. Neither is required, so
+     * each keeps its own availability instead of failing the whole Host.
+     */
+    const controls = { planMode: undefined, permissionPresets: undefined, fileUploads: undefined, tokenMeter: undefined, llm: undefined, sessionTitle: undefined, skills: undefined, workspaceRegistry: undefined };
+    ctx.inject(['workspaceRegistry'], (workspaceCtx) => {
+      controls.workspaceRegistry = workspaceCtx.get('workspaceRegistry');
+      return () => { controls.workspaceRegistry = undefined; };
+    });
+    const sessionArchive = createDshSessionArchive({
+      getRegistry: () => controls.workspaceRegistry,
+      subscribe,
+    });
+    ctx.inject(['planMode'], (planCtx) => {
+      controls.planMode = planCtx.get('planMode');
+      return () => { controls.planMode = undefined; };
+    });
+    ctx.inject(['permissionPresets'], (presetCtx) => {
+      controls.permissionPresets = presetCtx.get('permissionPresets');
+      return () => { controls.permissionPresets = undefined; };
+    });
+    // File attachments ride a receipt minted by the Session upload owner; without
+    // this service a file can still be read, but it cannot become a prompt part.
+    ctx.inject(['fileUploads'], (uploadCtx) => {
+      controls.fileUploads = uploadCtx.get('fileUploads');
+      return () => { controls.fileUploads = undefined; };
+    });
+    // The context meter and the model route: one measures the live session, the
+    // other discloses the routed model's context window. Both are optional, and
+    // each keeps its own absence.
+    ctx.inject(['tokenMeter'], (meterCtx) => {
+      controls.tokenMeter = meterCtx.get('tokenMeter');
+      return () => { controls.tokenMeter = undefined; };
+    });
+    ctx.inject(['llm'], (llmCtx) => {
+      controls.llm = llmCtx.get('llm');
+      return () => { controls.llm = undefined; };
+    });
+    // The title service owns the log-backed title fold and its provider, so the
+    // controller's "regenerate title" action goes through it rather than through a
+    // second title path of our own.
+    ctx.inject(['sessionTitle'], (titleCtx) => {
+      controls.sessionTitle = titleCtx.get('sessionTitle');
+      return () => { controls.sessionTitle = undefined; };
+    });
+    // The skill registry. Its answer depends on the *viewing scope*, so merely
+    // holding the service is not enough — see `liveAgentFor` below.
+    ctx.inject(['skills'], (skillCtx) => {
+      controls.skills = skillCtx.get('skills');
+      return () => { controls.skills = undefined; };
+    });
+
+    /**
+     * The viewing scope for one session's registry reads — skills, and the shape
+     * the command list beside them already uses.
+     *
+     * Skills live in layered registries: a preset's standing mount registers into
+     * that preset's layer, and a read answers for the viewing scope it is asked
+     * about. Reading from this Host's own context therefore names the global layer
+     * alone, which is how this menu came to be empty on a profile whose skills are
+     * all registered by a preset.
+     *
+     * The scope key is the **agent object itself**, not a tag read off its context:
+     * DSH's own skill tool calls `ctx.skills.list({ scope: agent, cwd })`, and the
+     * agent is the scope-carrier key its dispatcher couples the subject to. Asking
+     * `scopeOf(agent.ctx)` answers undefined — that context carries no tag — which
+     * is exactly how an empty menu survived the first fix attempt.
+     *
+     * A **live** agent is preferred, and a cold session is then resumed — the same
+     * thing the command list next to it does, for the same user action. Measured on
+     * this deployment: a cold session answered `skills: 0` and `commands: 6`
+     * (resolving the agent is what makes the difference), and the same session
+     * answered `skills: 6` once it was live. Both lists describe one session; two
+     * different answers there is not purity, it is a missing menu the user sees.
+     *
+     * A request naming **no** session is the new-task composer. Current DSH
+     * supplies `agentPresets.acquireScope()` instead of `standingKeyFor()`:
+     * keep that revision lease until the asynchronous catalog read settles,
+     * then release it even when the read fails. Neither path starts an Agent.
+     * Older carriers may still supply the non-owning standing key.
+     * @param sessionId - the session whose agent to use as a viewing scope, if any.
+     * @param read - the scoped catalog operation; must settle before lease disposal.
+     * @returns the catalog operation's result.
+     */
+    async function withAgentScope(sessionId, read) {
+      const named = typeof sessionId === 'string' && sessionId !== '';
+      const live = liveAgentFor(sessionId);
+      if (live !== undefined) return read(live);
+      if (named) {
+        const resolved = await sessionController.resolveAgent(sessionId);
+        return read(resolved?.error === undefined ? resolved.agent : undefined);
+      }
+      const presets = ctx.get('agentPresets');
+      if (typeof presets?.acquireScope === 'function') {
+        let lease;
+        try {
+          lease = await presets.acquireScope();
+        } catch {
+          // An unusable default composition retains the global-only palette.
+          return read(undefined);
+        }
+        try {
+          return await read(lease.key);
+        } finally {
+          await lease[Symbol.asyncDispose]();
+        }
+      }
+      let scope;
+      if (typeof presets?.standingKeyFor === 'function') {
+        try { scope = await presets.standingKeyFor(); } catch { /* Global-only fallback. */ }
+      }
+      return read(scope);
+    }
+
+    /**
+     * The live agent for one session, when this Host already has one.
+     *
+     * `ctx.agents.get(id)` answers for live agents only, which is the cheap first
+     * probe: it asks nothing of the session store and resumes nothing.
+     * @param sessionId - the session to look up.
+     * @returns the live agent, or undefined.
+     */
+    function liveAgentFor(sessionId) {
+      if (typeof sessionId !== 'string' || sessionId === '') return undefined;
+      const agents = ctx.get('agents');
+      if (typeof agents?.get !== 'function') return undefined;
+      try {
+        return agents.get(sessionId) ?? undefined;
+      } catch {
+        // A registry mid-teardown answers nothing; the caller then reads the
+        // global layer rather than failing the palette.
+        return undefined;
+      }
+    }
+
+    /**
+     * The plan-mode controller that belongs to one agent, when one is reachable.
+     *
+     * `ctx.planMode` is unreachable from this context by composition, not by
+     * accident: the Web bundle disables the base row and each preset composes
+     * the controller inside its own agent scope. Best effort only — the command
+     * route below is what actually reaches a preset-owned switch.
+     * @param agent - the controller-resolved agent, or undefined.
+     * @returns the plan-mode controller for that agent, or undefined.
+     */
+    function planModeFor(agent) {
+      const scoped = typeof agent?.ctx?.get === 'function' ? agent.ctx.get('planMode') : undefined;
+      return scoped === undefined ? controls.planMode : scoped;
+    }
+
+    /**
+     * The plan-mode controller mounted inside one agent's own scope.
+     * @param agent - the controller-resolved agent.
+     * @returns the scoped controller, or undefined when the preset mounts none.
+     */
+    function planModeInAgentScope(agent) {
+      return typeof agent?.ctx?.get === 'function' ? agent.ctx.get('planMode') : undefined;
+    }
+
+    /**
+     * Whether the agent's own scope registers the `/plan` command.
+     *
+     * This is the switch that actually exists in this deployment: `dsh-plan-mode`
+     * registers `/plan` through the command registry of whatever scope it was
+     * mounted in, and the same command list the phone's `/` palette already reads
+     * answers for one exact agent. A preset that composes no plan mode registers
+     * no such command, so this is the honest per-session test.
+     * @param agent - the agent to test.
+     * @returns true when `/plan` resolves for that agent.
+     */
+    function planCommandAvailable(agent) {
+      const commands = ctx.get('commands');
+      if (typeof commands?.find !== 'function') return false;
+      try {
+        return commands.find(agent, 'plan') !== undefined;
+      } catch {
+        return false;
+      }
+    }
+
+    /** Preset-composition reads are reused; the answer changes only on an edit. */
+    let presetInventory = { at: 0, value: null };
+
+    /**
+     * Whether the preset a session naming no preset would compose mounts plan
+     * mode.
+     *
+     * Used only when nothing live can answer — a freshly restarted Host has no
+     * agent to inspect, and answering "unsupported" there would take the
+     * control away from every controller until somebody opened a session. A row
+     * reported `'conditional'` (an unevaluated `!!js disabled` expression)
+     * counts as mounted: the refusal to evaluate is not evidence of absence.
+     * @returns true when the default composition names the plan-mode module.
+     */
+    async function presetComposesPlanMode() {
+      const presets = ctx.get('agentPresets');
+      if (typeof presets?.compositionInventory !== 'function') return false;
+      const now = Date.now();
+      if (presetInventory.value !== null && now - presetInventory.at < PRESET_INVENTORY_TTL_MS) return presetInventory.value;
+      let answer = false;
+      try {
+        const inventory = await presets.compositionInventory();
+        const rows = Array.isArray(inventory) ? inventory : [];
+        const target = rows.find((preset) => preset?.isDefault === true) ?? null;
+        if (Array.isArray(target?.rows)) {
+          answer = target.rows.some((row) => row?.moduleName === PLAN_MODE_MODULE && row.enabled !== false);
+        }
+      } catch {
+        // A composition this Host cannot read is not evidence that it mounts
+        // plan mode, so the answer stays false and the control stays hidden.
+        answer = false;
+      }
+      presetInventory = { at: now, value: answer };
+      return answer;
+    }
+
+    /**
+     * Read one session's authoritative projection state.
+     *
+     * The control stream *pushes* projection changes, but a push that never
+     * arrives is indistinguishable from "nothing changed": that is how a queue
+     * came to hold a phantom row for a message the agent had already answered.
+     * `observeSession` computes the registered projections on demand, so this is
+     * the read that can be trusted. The lease is always released.
+     * @param sessionId - the session to observe.
+     * @returns the projection values this Host consumes, or null when unreadable.
+     */
+    async function readSessionStateNow(sessionId) {
+      if (sessionQuery === undefined || typeof sessionQuery.observeSession !== 'function') return null;
+      let observation;
+      try {
+        observation = await sessionQuery.observeSession(sessionId, { projectionMode: 'all' });
+        const values = observation?.projections?.values;
+        if (values === null || typeof values !== 'object') return null;
+        return {
+          inbox: Object.prototype.hasOwnProperty.call(values, 'inbox') ? values.inbox : undefined,
+          goal: Object.prototype.hasOwnProperty.call(values, 'goal') ? values.goal : undefined,
+          hasGoalKey: Object.prototype.hasOwnProperty.call(values, 'goal'),
+          // What the session is running on. Effort is part of a model selection
+          // in DSH, so changing effort means re-stating the model — and this is
+          // where that model comes from.
+          modelSelection: Object.prototype.hasOwnProperty.call(values, 'modelSelection') ? values.modelSelection : undefined,
+        };
+      } catch {
+        // A projection read that fails costs a fresher answer, never the call.
+        return null;
+      } finally {
+        try {
+          observation?.[Symbol.dispose]?.();
+        } catch {
+          // Releasing a lease must not mask the answer.
+        }
+      }
+    }
+
+    /**
+     * The model one session is running on, for a write that must name it.
+     *
+     * A selection the user made is the authority; `next` is the one the coming
+     * request will use, and `lastUsed` is the fallback for a session whose
+     * pending selection was already consumed. The catalog default is the last
+     * resort, for a session that has never chosen.
+     * @param sessionId - the session to read.
+     * @returns `{ provider, model }`, or null when nothing can name it.
+     */
+    async function currentSelection(sessionId) {
+      const state = await readSessionStateNow(sessionId);
+      const selection = state?.modelSelection?.next ?? state?.modelSelection?.lastUsed ?? null;
+      if (typeof selection?.provider === 'string' && selection.provider !== ''
+        && typeof selection?.model === 'string' && selection.model !== '') {
+        return {
+          provider: selection.provider,
+          model: selection.model,
+          // The effort the session already runs on belongs here: changing effort means
+          // re-stating the whole selection, and "set it to what it already is" has to
+          // be recognisable as a no-op (see `setEffort`).
+          ...(typeof selection.reasoningEffort === 'string' && selection.reasoningEffort !== ''
+            ? { reasoningEffort: selection.reasoningEffort }
+            : {}),
+        };
+      }
+      try {
+        const catalog = await sessionController.modelCatalog();
+        const fallback = catalog?.default;
+        if (typeof fallback?.provider === 'string' && fallback.provider !== ''
+          && typeof fallback?.model === 'string' && fallback.model !== '') {
+          return { provider: fallback.provider, model: fallback.model };
+        }
+      } catch {
+        // A failed catalog read leaves the caller to refuse rather than guess.
+      }
+      return null;
+    }
+
+    /**
+     * The reasoning efforts the catalog declares for one model route.
+     *
+     * `null` means "this Host cannot say" — a catalog that never loaded, or a route it
+     * does not list — and the caller then lets DSH answer rather than inventing a
+     * refusal for a model it has not read about.
+     * @param selection - `{ provider, model }`.
+     * @returns the effort ids, or null when unknown.
+     */
+    async function supportedEfforts(selection) {
+      try {
+        const catalog = await sessionController.modelCatalog();
+        const groups = Array.isArray(catalog?.groups) ? catalog.groups : [];
+        const group = groups.find((entry) => entry?.id === selection.provider);
+        const model = (Array.isArray(group?.models) ? group.models : []).find((entry) => entry?.id === selection.model);
+        const efforts = Array.isArray(model?.reasoning?.efforts) ? model.reasoning.efforts : [];
+        const ids = efforts.map((effort) => effort?.id).filter((id) => typeof id === 'string' && id !== '');
+        return ids.length > 0 ? ids : null;
+      } catch {
+        return null;
+      }
+    }
+
+    /**
+     * Install one session-local model selection, resolving the provider when the
+     * caller has none.
+     *
+     * The controller's model option carries no provider id — the catalog flattens
+     * models out of their provider groups — so a choice usually arrives with the
+     * model alone. This Host's own catalog is the authority on which provider
+     * serves it, and guessing would risk switching to a different model than the
+     * user picked.
+     *
+     * DSH's `session.selectModel` is the only write that installs a selection, and
+     * it has two effects by design: the session's coming request uses it **and** the
+     * profile's `agent-default-model` is updated — exactly what the desk's own model
+     * picker does. That is why a conversation created from the handset with gpt also
+     * becomes the default for sessions no picker has touched yet.
+     * @param request - the session, its requested provider/model, and optional effort.
+     * @returns DSH's normalized `{ selected }` answer.
+     */
+    async function applyModelSelection({ sessionId, provider, model, reasoningEffort }) {
+      let resolved = provider;
+      if (typeof resolved !== 'string' || resolved === '') {
+        const catalog = await sessionController.modelCatalog();
+        const groups = Array.isArray(catalog?.groups) ? catalog.groups : [];
+        resolved = groups.find((group) => (Array.isArray(group?.models) ? group.models : [])
+          .some((entry) => entry?.id === model))?.id;
+      }
+      if (typeof resolved !== 'string' || resolved === '') {
+        throw refusalError('NOT_AVAILABLE', "no provider in this Host's catalog serves " + model);
+      }
+      try {
+        return await sessionController.selectModel({
+          sessionId,
+          provider: resolved,
+          model,
+          ...(reasoningEffort === undefined ? {} : { reasoningEffort }),
+        });
+      } catch (error) {
+        // DSH refuses a route it cannot resolve with `session/model-unavailable`.
+        // Passed through raw that reaches the controller as `THREW`, which it reads
+        // as this Host crashing rather than as "that model is not usable here" — the
+        // same misreading the effort refusal was fixed for. Only that refusal is
+        // translated; anything else is a genuine failure and travels unchanged.
+        if (error?.code === 'session/model-unavailable') {
+          throw refusalError('NOT_AVAILABLE', String(error?.message ?? error));
+        }
+        throw error;
+      }
+    }
+
+    /** The permission preset names this Host advertises, in the preset table's order. */
+    function advertisedPermissionNames() {
+      const presets = controls.permissionPresets;
+      return Array.isArray(presets?.names) ? [...presets.names] : [];
+    }
+
+    /**
+     * Write one permission preset onto one session.
+     *
+     * The preset is written onto the **session**; the service then drives the
+     * sandbox-mode and approval-policy knobs that execution reads. Shared by the
+     * explicit `maker:set-permission-mode` channel and the create path, so both
+     * install a preset the same way.
+     * @param request - the session to write and the preset name to install.
+     */
+    async function installPermissionMode({ sessionId, mode }) {
+      const presets = controls.permissionPresets;
+      if (typeof presets?.set !== 'function') throw new Error('permission presets are not composed on this Host');
+      const resolved = await sessionController.resolveAgent(sessionId);
+      if (resolved?.error !== undefined) throw resolved.error;
+      presets.set(resolved.agent.session, mode);
+    }
+
+    /**
+     * Install the permission preset a **new** conversation asked for, when this Host
+     * advertises it.
+     *
+     * The controller's permission vocabulary is not this Host's. `maker:get-capabilities`
+     * answers `permissionModes` from DSH's own preset table, and the handset coerces its
+     * draft into that list (`reconcileRuntimeDraftWithCapabilities`), so an advertised
+     * name is the ordinary case and it is installed verbatim. That matters more here than
+     * anywhere else on this seam: a user who picks `read-only` and silently receives the
+     * profile default of `danger-full-access` believes the agent is restricted while it
+     * holds full access.
+     *
+     * An unadvertised name — the handset's legacy fallback list (`ask`, `acceptEdits`,
+     * `plan`, `bypassPermissions`) when its capability read failed — is deliberately
+     * **not** translated and deliberately **not** refused. Translating would guess a
+     * privilege level on the user's behalf, and refusing would leave a phone whose
+     * capability read failed unable to start any conversation at all. It stays at the
+     * profile's preset, is logged, and the session row reports what is in force.
+     * @param request - the session and the preset name the controller asked for.
+     * @returns the installed name, or null when this Host does not advertise it.
+     */
+    async function applyPermissionMode({ sessionId, mode }) {
+      const advertised = advertisedPermissionNames();
+      if (!advertised.includes(mode)) {
+        // Loud rather than silent: the log is where an absorbed, unhonoured request is
+        // visible, and the advertised list is what makes it actionable.
+        ctx.logger?.warn?.(`create-session: this Host advertises ${JSON.stringify(advertised)} but the controller asked for permission mode "${mode}"; keeping the profile preset`);
+        return null;
+      }
+      await installPermissionMode({ sessionId, mode });
+      return mode;
+    }
+
+    /**
+     * The routed model's context window, when the provider discloses one.
+     *
+     * `LlmResolvedModelInfo.context` is optional — a provider that lists an id and
+     * nothing else leaves it absent. An absent window is reported as null rather
+     * than guessed from the request's `maxTokens` (that is an **output** bound, and
+     * using it as a context window would show the user a percentage that means
+     * nothing).
+     * @param sessionId - the session whose selection names the route.
+     * @returns the window in tokens, or null when unknown.
+     */
+    async function contextWindowFor(sessionId) {
+      const llm = controls.llm;
+      if (typeof llm?.resolveModelInfo !== 'function') return null;
+      const selection = await currentSelection(sessionId);
+      if (selection === null) return null;
+      try {
+        const resolved = await llm.resolveModelInfo(selection.provider, selection.model);
+        const window = resolved?.context?.contextWindow;
+        return Number.isFinite(window) && window > 0 ? window : null;
+      } catch {
+        return null;
+      }
+    }
+    // Message history comes from the raw log, not the projection: the projection
+    // carries list rows, and `sessionController.page()` would need a `throughSeq`
+    // the Host has no cheap way to learn.
+    //
+    // An image the phone sent comes back as a durable DSH attachment, and DSH's own
+    // reference for it is content-addressed — deliberately neither a path nor a URL
+    // ("never a filesystem path or bearer URL"), so there is nothing to hand the
+    // controller for rendering. `ctx.attachments.readImage` is the way back to the
+    // bytes, and inlining them is what makes the photo appear in the bubble instead of
+    // the 没有可展示的远程路径 placeholder. Read per request, so a profile whose
+    // attachment service activates later is picked up without a rebuild; absent, the
+    // rows simply keep their file chips.
+    //
+    // Counted, because "the photo does not render" has three indistinguishable causes
+    // from the outside — no handle on the block, no attachment service on this profile,
+    // or a read that failed — and the counter is what separates them.
+    const attachmentReads = { attempted: 0, served: 0, failed: 0 };
+    const readImageAttachment = async (handle) => {
+      const store = ctx.get('attachments');
+      if (store === undefined || typeof store.readImage !== 'function') {
+        attachmentReads.failed += 1;
+        return null;
+      }
+      attachmentReads.attempted += 1;
+      try {
+        // The descriptor is passed through **whole**: it is the value DSH stored, and
+        // the store validates what it is asked to read.
+        const stored = await store.readImage(handle, AbortSignal.timeout(5_000));
+        const data = stored?.data;
+        if (data === undefined || data === null) {
+          attachmentReads.failed += 1;
+          return null;
+        }
+        attachmentReads.served += 1;
+        return {
+          base64: Buffer.from(data).toString('base64'),
+          bytes: Number.isFinite(stored?.ref?.bytes) ? stored.ref.bytes : Buffer.from(data).length,
+          mediaType: typeof stored?.ref?.mediaType === 'string' ? stored.ref.mediaType : undefined,
+        };
+      } catch {
+        // One unreadable image costs that image, never the page.
+        attachmentReads.failed += 1;
+        return null;
+      }
+    };
+    const readAttachmentSource = createNativeAttachmentSourceReader({
+      getSession: sessionId => sessionSource.getSession(sessionId),
+      readSessionLog: sessionQuery === undefined ? undefined : sessionId => sessionQuery.readSession(sessionId),
+      readImage: readImageAttachment,
+    });
+    const readMessages = sessionQuery === undefined
+      ? undefined
+      : createMessageReader({ readSessionLog: (sessionId) => sessionQuery.readSession(sessionId), readImageAttachment });
+    /**
+     * Turn image handles into bytes for **whatever is about to reach the phone**.
+     *
+     * One hydrator, three call sites (`messages:list` pages, history-view pages, and the live
+     * `messages:created` push), because "the user's photo does not render" has already happened
+     * once by hydration living on a single path: it was wired into `messages:list`, the
+     * controller moved onto the history view, and every photo went back to a path-less chip.
+     * A row is only renderable after this runs, so every path that hands a row to a controller
+     * has to run it.
+     */
+    const hydrateRows = (rows) => hydrateImageAttachments(rows, { readImage: readImageAttachment });
+    /**
+     * How many rows one session's transcript holds.
+     *
+     * The controller only lights its "load earlier" entry point when it knows the
+     * total and the total exceeds what it has loaded
+     * (`hasOlderMessagesByServerCount`: an unknown total is deliberately treated
+     * as "no"), and it reads that total from the session row's `_count.messages`.
+     * This Host used to answer `_count: null`, so the entry point never lit up.
+     * The count is computed on the single-session read rather than the list, which
+     * the controller polls: folding every transcript on every poll would trade a
+     * paging bug for a latency one.
+     */
+    const countMessages = sessionQuery === undefined || readMessages === undefined
+      ? undefined
+      : createMessageCounter({ reader: readMessages });
+    /**
+     * The work-grouped history window the controller prefers once it has seen
+     * `history-view-v1`.
+     *
+     * History consumes an explicit source-order snapshot, not the raw window's legacy
+     * array order. Prefer the flushed/validated durable backend when available; the
+     * fallback reader shares its cached fold and reasoning reducer with its raw window.
+     */
+    const deliveryServices = { sessions: undefined, persistence: undefined, agents: undefined };
+    ctx.inject(['sessions', 'sessionPersistence', 'agents'], deliveryCtx => {
+      deliveryServices.sessions = deliveryCtx.get('sessions'); deliveryServices.persistence = deliveryCtx.get('sessionPersistence'); deliveryServices.agents = deliveryCtx.get('agents');
+      return () => { deliveryServices.sessions = undefined; deliveryServices.persistence = undefined; deliveryServices.agents = undefined; };
+    });
+    const inputDeliveryBackend = createDshInputDeliveryBackend({
+      getServices: () => ({ ...deliveryServices, fileSystem: ctx.get('fs'), fileUploads: controls.fileUploads }),
+      sessionController,
+      getSession: (sessionId) => sessionSource.getSession(sessionId),
+      ensurePlanModeOff: ({agent}) => ensureNativeContinuationPlanOff({agent,controller:planModeFor(agent),getService:name=>ctx.get(name)}),
+    });
+    const committedRows = async (sessionId) => {
+      const rows = await (inputDeliveryBackend.available() ? inputDeliveryBackend.readRows(sessionId) : readMessages.all(sessionId));
+      return options.projectMessages?.(rows) ?? rows;
+    };
+    const historyView = readMessages === undefined
+      ? undefined
+      : createHistoryViewController({
+        snapshot: async (sessionId) => {
+          const snapshot = await (inputDeliveryBackend.available()
+            ? inputDeliveryBackend.historySnapshot(sessionId) : readMessages.historySnapshot(sessionId));
+          return { ...snapshot, rows: options.projectMessages?.(snapshot.rows) ?? snapshot.rows };
+        },
+        // The turn state has to be **wired** here; the controller's own default is `() => false`.
+        // That default is why a running turn was never marked `isStreaming`, which cost two things
+        // at once and looked like a client problem both times: the phone drew no live card, and
+        // the "running card is last" rule had nothing to detect, so the user's own messages stayed
+        // below their own conversation.
+        sessionRunning: (sessionId) => options.isSessionRunning?.(sessionId) === true,
+        // …and so does this: the view is what the controller actually reads, so without it a
+        // photo arrives as a file entry whose `imageRef` means nothing to the phone.
+        hydrate: hydrateRows,
+      });
+    // Bound once, not inline: the rename path has to be able to invalidate this source's
+    // cached title, and a property of the object literal below is not in scope here.
+    const sessionSource = createSessionControllerSource({
+      sessionController,
+      readActiveSessions: () => readActiveSessionSummaries(ctx),
+      subscribe: (name, listener) => ctx.on(name, listener),
+      readTitles: sessionQuery === undefined ? undefined : (ids) => readTitles(sessionQuery, ids),
+      readSessionMeta: sessionQuery === undefined ? undefined : (ids) => readSessionMeta(sessionQuery, ids),
+      readActivityEvidence: typeof readMessages?.activity === 'function' ? (sessionId) => readMessages.activity(sessionId) : undefined,
+      // ID lookup is not sidebar discovery. New drafts exist before they have a
+      // user turn and must be readable without waiting for the list cache.
+      readSessionSummary: typeof sessionQuery?.observeSession !== 'function' ? undefined : async (sessionId) => {
+        let observation;
+        try {
+          observation = await sessionQuery.observeSession(sessionId, { projectionMode: 'all', signal: AbortSignal.timeout(15_000) });
+          const header = observation.header;
+          if (header.id !== sessionId || header.cwd === undefined) return undefined;
+          const metadata = observation.projections?.values?.sessionListMetadata;
+          return {
+            sessionId: header.id,
+            createdAt: header.createdAt,
+            updatedAt: Math.max(header.createdAt, metadata?.lastPromptAt ?? 0),
+            cwd: header.cwd,
+            origin: header.origin,
+            parentSessionId: header.parentSession,
+            blank: metadata?.blank === true,
+            running: options.isSessionRunning?.(sessionId) === true,
+            projections: observation.projections,
+          };
+        } catch (error) {
+          if (error?.code === 'SESSION_QUERY_SESSION_NOT_FOUND') return undefined;
+          throw error; // An I/O or replay failure is not evidence of absence.
+        } finally {
+          observation?.[Symbol.dispose]?.();
+        }
+      },
+    });
+    // The runtime observes native archive commits even when the relay is offline.
+    sessionSource.archive = sessionArchive;
+    const compactServices = { commands: undefined };
+    const manualCompact = createDshManualCompact({
+      getCommands: () => compactServices.commands,
+      getSession: sessionId => sessionSource.getSession(sessionId),
+      resolveAgent: typeof sessionController.resolveAgent === 'function' ? sessionId => sessionController.resolveAgent(sessionId) : undefined,
+      isHidden: sessionId => sessionArchive.isArchived(sessionId) === true,
+      onSettled: sessionId => {
+        readMessages?.invalidate?.(sessionId);
+        historyView?.invalidate?.(sessionId);
+        sessionSource.invalidateActivityEvidence?.(sessionId);
+        sessionSource.invalidateListing?.();
+      },
+    });
+    ctx.inject(['commands'], commandCtx => {
+      compactServices.commands = commandCtx.get('commands');
+      return () => { compactServices.commands = undefined; manualCompact.cancelAll('Native command service removed'); };
+    });
+    sessionSource.manualCompact = manualCompact;
+    const forkSession = createDshFork({
+      getController: () => ctx.get('sessionController'),
+      getQuery: () => ctx.get('sessionQuery'),
+      getSession: sessionId => sessionSource.getSession(sessionId),
+      isHidden: sessionId => sessionArchive.isArchived(sessionId) === true,
+      invalidate: () => sessionSource.invalidateListing?.(),
+    });
+    sessionSource.forkSession = forkSession;
+    const keywordSearch = createDshKeywordSearch({
+      getQuery: () => ctx.get('sessionQuery'),
+      getSession: sessionId => sessionSource.getSession(sessionId),
+    });
+    sessionSource.keywordSearch = keywordSearch;
+    const backgroundJobs = createDshBackgroundJobs({
+      getRegistry: () => ctx.get('jobs'),
+      getSession: (sessionId, options) => sessionSource.getSession(sessionId, options),
+    });
+    sessionSource.backgroundJobs = backgroundJobs;
+    const subagentReads = createDshSubagentReads({
+      getSubagents: () => ctx.get('subagents'),
+      getQuery: () => ctx.get('sessionQuery'),
+      getAgents: () => ctx.get('agents'),
+      getParent: (id, options) => sessionSource.getSession(id, options),
+    });
+    sessionSource.subagentReads = subagentReads;
+    const reminders = createDshReminders({
+      getService: () => ctx.get('schedule'),
+      getSession: (id, options) => sessionSource.getSession(id, options),
+      subscribeChanged: listener => subscribe('schedule/changed', listener),
+    });
+    sessionSource.reminders = reminders;
+    const projectOrder = createDshProjectOrder({
+      getRegistry: () => ctx.get('workspaceRegistry'), getController: () => ctx.get('workspaceController'),
+      getOwner: () => options.getProjectOrderOwner?.(),
+      subscribeChanged: listener => subscribe('domain/changed', listener),
+    });
+    sessionSource.projectOrder = projectOrder;
+    const referenceHistory = createDshReferenceHistory({ getQuery: () => ctx.get('sessionQuery'), getSession: (id, options) => sessionSource.getSession(id, options) });
+    sessionSource.referenceHistory = referenceHistory;
+    return {
+      referenceHistory,
+      projectOrder,
+      reminders,
+      subagentReads,
+      backgroundJobs,
+      keywordSearch,
+      forkSession,
+      manualCompact,
+      kind: 'session-controller',
+      sessionArchive,
+      readMessages,
+      readAllMessages: readMessages === undefined ? undefined : committedRows,
+      inputDeliveryBackend,
+      countMessages,
+      historyView,
+      // Reported through the status route: "the photo does not render" has three
+      // indistinguishable causes from the outside, and this separates them.
+      attachmentReads,
+      readAttachmentSource,
+      // Internal plumbing rather than a controller capability: the live push path has to inline a
+      // message's images before the row leaves, exactly like the two read paths do. It rides the
+      // seam so there is **one** hydrator (`hydrateRows`) instead of one per caller — a second
+      // copy is how the history view ended up serving un-hydrated rows.
+      hydrateImages: hydrateRows,
+      /**
+       * Create one session **the way the desk's own UI creates it**.
+       *
+       * `session.create` takes `workspaceId` **or** `cwd`, never both, and only the
+       * workspace form calls `workspace.attachSession()` — the registration that DSH's
+       * own session list groups by (the `sessionIds` array in
+       * `.dsh/storages/workspace.json`). Creating with a bare `cwd` therefore produces a
+       * session that exists, runs, streams and answers, and is **invisible in DSH
+       * itself**: reported from the handset as 手机上新建一个对话，dsh 上没看到, and
+       * measured — the phone's session was absent from that workspace's `sessionIds`
+       * while a Web-created session sat in it.
+       *
+       * So the requested directory is resolved to its workspace first (reusing the
+       * existing record for that canonical path, creating one only when the directory is
+       * genuinely new to DSH). A `workspaceRegistry` that cannot place the path — not
+       * mounted, relative, missing, a file — falls back to the bare `cwd`, which keeps
+       * the old behaviour: the session is created, it just is not grouped on the desk.
+       *
+       * It also installs the model the controller picked, because a new conversation
+       * has no other way to say it: the handset's pipeline is create, getSession,
+       * enqueue, and it never calls `setModel` (`newSessionCreation.ts`), so the
+       * runtime it chose reaches this Host **only** in these options. Creating first
+       * and selecting second is the only order DSH allows — a selection needs a
+       * session — and it is the difference between the user's pick and the profile
+       * default: without it the first prompt runs on `agent-default-model` and the
+       * handset reports 「新对话选了 gpt，一运行又变成 deepseek」.
+       *
+       * The permission preset rides the same options for the same reason, and it is the
+       * one where a wrong answer is dangerous rather than merely annoying: a session that
+       * keeps `danger-full-access` after the user asked for `read-only` reads as a
+       * restriction the agent does not have. Only a name this Host advertises is
+       * installed — see `applyPermissionMode` — and the reply names it only when it was
+       * really installed.
+       *
+       * A model this Host cannot route **throws** rather than being swallowed. The
+       * session exists either way, and the controller's create retry is idempotent
+       * and probes for the session before rebuilding, so the honest refusal costs one
+       * retry while a silent wrong model costs a conversation.
+       */
+      createSession: async (options) => {
+        const cwd = typeof options?.cwd === 'string' && options.cwd !== '' ? options.cwd : undefined;
+        const workspace = await workspaceForNewSession(cwd);
+        const created = await sessionController.create({
+          ...(options.sessionId === undefined ? {} : { sessionId: options.sessionId }),
+          ...(workspace === undefined ? (cwd === undefined ? {} : { cwd }) : { workspaceId: workspace.id }),
+        });
+        sessionSource.invalidateListing();
+        const installed = {};
+        if (typeof options?.model === 'string' && options.model !== '') {
+          const applied = await applyModelSelection({
+            sessionId: created.sessionId,
+            provider: options.provider,
+            model: options.model,
+            reasoningEffort: options.reasoningEffort,
+          });
+          installed.selection = applied?.selected ?? null;
+        }
+        const mode = typeof options?.permissionMode === 'string' ? options.permissionMode.trim() : '';
+        if (mode !== '') {
+          const permissionMode = await applyPermissionMode({ sessionId: created.sessionId, mode });
+          if (permissionMode !== null) installed.permissionMode = permissionMode;
+        }
+        return Object.keys(installed).length === 0 ? created : { ...created, ...installed };
+      },
+      /**
+       * Send one prompt, carrying whatever attachments this Host can serve.
+       *
+       * The controller's attachments arrive inside the message. An absolute host path
+       * is read through the composed filesystem, and an upload transit reference is
+       * fetched from the account's media staging area (`resolveAttachmentRef`, which
+       * this runtime supplies because the account session is its own). Both become a
+       * durable DSH attachment — an image part, or a file receipt.
+       *
+       * Text-bearing prompts are never refused for an attachment that could not be
+       * carried: the text still goes, and the answer says what was left out. A prompt
+       * that is **only** an attachment is the one case that must fail loudly, because
+       * there is nothing left to send — accepting it would show the user a delivered
+       * photo that the agent never saw.
+       */
+      sendMessage: async ({ sessionId, text, requestId, mode, attachments, resolveAttachmentRef, releaseAttachmentRef }) => {
+        const incoming = Array.isArray(attachments) ? attachments : [];
+        const body = typeof text === 'string' ? text : '';
+        let parts = [];
+        let dropped = [];
+        let consumed = [];
+        if (incoming.length > 0) {
+          const fileSystem = ctx.get('fs');
+          const materializer = createAttachmentMaterializer({
+            fileSystem,
+            fileUploads: controls.fileUploads,
+            resolveAttachmentRef,
+          });
+          const resolved = await sessionController.resolveAgent(sessionId);
+          if (resolved?.error !== undefined) throw resolved.error;
+          ({ parts, dropped, consumed } = await materializer.materialize({
+            agent: resolved.agent,
+            attachments: incoming,
+            signal: AbortSignal.timeout(30_000),
+          }));
+        }
+        if (parts.length === 0 && incoming.length > 0 && body.trim() === '') {
+          return {
+            ok: false,
+            code: 'ATTACHMENT_UNAVAILABLE',
+            message: `this Host could not fetch the attachment: ${dropped.map((entry) => entry.reason).join(', ') || 'unknown reason'}`,
+            attachmentsDropped: dropped,
+          };
+        }
+        const content = [
+          ...(body !== '' ? [{ type: 'text', text: body }] : []),
+          ...parts,
+        ];
+        const result = await sessionController.prompt({
+          requestId,
+          sessionId,
+          // An idle turn queues; a running turn steers. Both are the same DSH
+          // primitive, which is why one capability serves both channels.
+          mode: mode === 'steer' ? 'steer' : 'queue',
+          content,
+        // `signal` is REQUIRED here, not optional: the service calls
+        // `signal.throwIfAborted()` on entry, so omitting it throws a TypeError
+        // that the controller never sees — it just keeps spinning. The timeout is
+        // the honest bound: acceptance is fast, and a prompt still unaccepted
+        // after 30s is a failure, not a slow success.
+        }, AbortSignal.timeout(30_000));
+        // The staged object was a **transit** copy, and its bytes are now a durable
+        // DSH attachment. Releasing it after the prompt has landed keeps the staging
+        // area from accumulating an orphan per photo; a failure here is never worth
+        // failing a prompt that already succeeded, so it is best-effort by contract.
+        if (typeof releaseAttachmentRef === 'function') {
+          for (const ossKey of consumed) void releaseAttachmentRef(ossKey).catch(() => undefined);
+        }
+        return { ok: true, result, attachmentsServed: parts.length, attachmentsDropped: dropped };
+      },
+      /**
+       * Rename, and drop the cached title the same moment.
+       *
+       * The row this answers with is built from the list read, which serves titles from a
+       * cache (`dsh-session-source.js`); without this the controller would read back the
+       * **old** title for up to the cache's TTL and look like the rename failed. A rename
+       * is the only title change this Host causes itself, so it is the only one that needs
+       * telling.
+       */
+      renameSession: async ({ sessionId, title }) => {
+        const result = await sessionController.rename({ sessionId, title });
+        sessionSource.invalidateTitle?.(sessionId);
+        return result;
+      },
+      /**
+       * The controller's queue commands.
+       *
+       * DSH keeps the pending queue in the session's durable inbox, so a queued
+       * message is not something this Host can edit on its own: `updateQueue` is
+       * the only supported mutation, and it is compare-and-set on the item id
+       * the controller already holds.
+       */
+      queueControl: {
+        /**
+         * Commit one pending-queue mutation.
+         *
+         * `updateQueue` mutates the **live agent's** inbox and refuses outright
+         * when there is none — with the message "queued item is no longer
+         * pending", which reads as a race and is really "this session is not
+         * attached". So the agent is resolved first, exactly as the goal writes
+         * do; without it every cancel and edit failed on a session nobody had
+         * opened, even though the item was plainly still queued.
+         */
+        update: async ({ sessionId, itemId, action }) => {
+          const resolved = await sessionController.resolveAgent(sessionId);
+          if (resolved?.error !== undefined) throw resolved.error;
+          return sessionController.updateQueue({ sessionId, itemId, action });
+        },
+        // Cancels the active turn **without** dropping the pending inbox, which
+        // is exactly what the controller asks for when it stops with a queue.
+        cancel: ({ sessionId }) => sessionController.cancel({ sessionId }),
+      },
+      /**
+       * How full one session's context is.
+       *
+       * A **read**, so it never resumes a session to answer: `ctx.sessions` holds
+       * live sessions only, and a cold session answers `null` (the controller
+       * renders that as "暂无上下文数据") rather than paying a resume for a number
+       * the user only glances at. That is the same rule the goal read follows.
+       *
+       * The total comes from `ctx.tokenMeter.measure(session)`; the window comes
+       * from the routed model, and is omitted when the provider does not disclose
+       * one — the controller then shows the raw count instead of a percentage it
+       * would have to invent.
+       * @param request - the session to measure.
+       * @returns `{ totalTokens, maxTokens?, percent? }`, or null when unknown.
+       */
+      contextUsage: async ({ sessionId }) => {
+        const meter = controls.tokenMeter;
+        if (typeof meter?.measure !== 'function') return null;
+        const sessions = ctx.get('sessions');
+        const session = typeof sessions?.get === 'function' ? sessions.get(sessionId) : undefined;
+        if (session === undefined) return null;
+        let measurement;
+        try {
+          measurement = meter.measure(session);
+        } catch {
+          return null;
+        }
+        const totalTokens = Number.isFinite(measurement?.totalTokens) ? measurement.totalTokens : null;
+        if (totalTokens === null) return null;
+        const window = await contextWindowFor(sessionId);
+        if (window === null || window <= 0) return { totalTokens };
+        return { totalTokens, maxTokens: window, percent: Math.min(100, Math.max(0, (totalTokens / window) * 100)) };
+      },
+      /**
+       * Regenerate one session's title.
+       *
+       * The controller's contract is generate-only — it persists whatever it gets
+       * through `local-db:sessions:patch-meta` — and it renders `{ title: null }` as
+       * "nothing to name it with". So a service that is absent, a session that is
+       * cold, and a provider that fails all answer the same way, and none of them is
+       * an error frame.
+       *
+       * A cold session is deliberately **not** resumed: this is a decoration on a
+       * session the user has open, and waking an agent to name it would be a side
+       * effect nobody asked for (the rule the goal and context reads follow too).
+       * @param request - the session whose title should be regenerated.
+       * @returns `{ title }`, null when there is none.
+       */
+      regenerateTitle: async ({ sessionId }) => {
+        const titles = controls.sessionTitle;
+        if (typeof titles?.refresh !== 'function') return { title: null };
+        const sessions = ctx.get('sessions');
+        const session = typeof sessions?.get === 'function' ? sessions.get(sessionId) : undefined;
+        if (session === undefined) return { title: null };
+        const snapshot = await titles.refresh(session, AbortSignal.timeout(25_000));
+        const title = typeof snapshot?.title === 'string' && snapshot.title !== '' ? snapshot.title : null;
+        return { title };
+      },
+      /**
+       * The model catalog the controller's picker reads.
+       *
+       * A capability read is the only way it learns this Host's models, and it
+       * asks once per device: an empty catalog does not look like a missing
+       * feature, it looks like a Host with nothing to offer.
+       */
+      modelCatalog: async () => {
+        const catalog = await sessionController.modelCatalog();
+        const llm = controls.llm;
+        const enriched = await enrichModelCatalog(catalog,
+          typeof llm?.resolveModelInfo === 'function' ? llm.resolveModelInfo.bind(llm) : undefined);
+        if (enriched?.contextFailures?.length) {
+          ctx.logger?.warn?.('Cindy model context metadata unavailable', {
+            count: enriched.contextFailures.length,
+            codes: [...new Set(enriched.contextFailures.map((item) => item.code))],
+          });
+        }
+        return enriched;
+      },
+      /**
+       * Make sure a session has a live agent, and say whether it does.
+       *
+       * The inbox — the pending queue — is a property of the **live agent**. A
+       * cold session's projection snapshot carries no inbox at all, so a queue
+       * that is plainly durable reads as empty until something attaches the
+       * session, and a mutation is refused with "queued item is no longer
+       * pending". Reading or changing the queue therefore begins by attaching.
+       */
+      ensureAgent: async (sessionId) => {
+        const resolved = await sessionController.resolveAgent(sessionId);
+        return resolved?.error === undefined;
+      },
+      /**
+       * Read one session's authoritative projection state.
+       *
+       * The control stream *pushes* projection changes, but a push that never
+       * arrives is indistinguishable from "nothing changed": that is how a queue
+       * came to hold a phantom row for a message the agent had already answered.
+       * `observeSession` computes the registered projections on demand, so this is
+       * the read that can be trusted. The lease is always released.
+       */
+      readSessionState: readSessionStateNow,
+      /** Native DSH validates and records selections for the next model request,
+       * including during a turn. Do not advertise that authority when absent. */
+      selectModel: typeof sessionController.selectModel === 'function'
+        ? async ({ sessionId, provider, model, reasoningEffort }) =>
+          applyModelSelection({ sessionId, provider, model, reasoningEffort })
+        : undefined,
+      /**
+       * Change one session's reasoning effort.
+       *
+       * Effort is part of a **model selection** in DSH
+       * (`SessionSelectModelRequest extends ModelSelection`), so the write has to
+       * name the model it applies to. The session's own selection is the
+       * authority — re-stating it is not a model switch, and picking the catalog
+       * default here would silently move a session onto another model as a side
+       * effect of changing effort.
+       */
+      setEffort: async ({ sessionId, effort }) => {
+        const selection = await currentSelection(sessionId);
+        if (selection === null) throw new Error('this Host cannot name the model this session runs on');
+        // Re-stating the effort a session already runs on is a no-op, not a write.
+        //
+        // This is not just an optimisation: DSH validates the effort against the model
+        // *route*, and a route that lists no `default` rejects the word outright
+        // ("provider \"openai-codex\" model \"gpt-5.6-sol\" does not support reasoning
+        // effort \"default\"") while the session is demonstrably running on it. The
+        // controller restores the value it read from the row, so that combination is
+        // the *ordinary* path — and it used to surface as the Host crashing.
+        if (selection.reasoningEffort === effort) return selection;
+        const supported = await supportedEfforts(selection);
+        if (supported !== null && !supported.includes(effort)) {
+          throw refusalError('NOT_AVAILABLE', `model ${selection.model} offers no reasoning effort "${effort}"`);
+        }
+        return sessionController.selectModel({ sessionId, ...selection, reasoningEffort: effort });
+      },
+      /**
+       * The composer's `/` and `@` palettes.
+       *
+       * All three sources are other plugins' services and may be absent, so each
+       * answers with an empty envelope rather than refusing: an empty palette is
+       * honest ("nothing to offer"), while a refusal here reads to the controller
+       * as a broken composer.
+       */
+      palette: {
+        /**
+         * The skills the human-facing `/` menu can offer.
+         *
+         * **The scope is the whole point.** `ctx.skills.list()` reads the *global*
+         * layer when no scope is given, and an agent preset's skills are registered
+         * into that preset's own layer — so listing from the host context answered
+         * "no skills" on a profile that plainly has them (the phone's `/` menu was
+         * empty while its command list was not).
+         *
+         * The scope comes from the session's own agent, which is the only way a
+         * preset's layer is visible at all — see `withAgentScope`.
+         */
+        skills: async ({ cwd, sessionId }) => withAgentScope(sessionId, async (scope) => {
+          const presets = ctx.get('agentPresets');
+          // A live Agent's preset may isolate its skill service from the Host.
+          const scoped = scope?.ctx !== undefined && typeof presets?.serviceFor === 'function'
+            ? presets.serviceFor(scope, 'skills') : undefined;
+          const skills = scoped ?? controls.skills;
+          if (skills === undefined || typeof skills.list !== 'function') return [];
+          return skills.list({
+            ...(scope === undefined ? {} : { scope }),
+            ...(cwd === undefined ? {} : { cwd }),
+          });
+        }),
+        commands: async ({ sessionId }) => {
+          const commands = ctx.get('commands');
+          if (commands === undefined || typeof commands.list !== 'function') return [];
+          const resolved = await sessionController.resolveAgent(sessionId);
+          // A cold session still has a command catalog; the agent is only what
+          // DSH keys it by, so an unresolvable session yields no commands rather
+          // than an error the palette would show as broken.
+          return resolved?.error === undefined ? commands.list(resolved.agent) : [];
+        },
+        resources: async ({ workingDir, query, cap }) => {
+          const fileSystem = ctx.get('fs');
+          if (fileSystem === undefined || typeof fileSystem.listDir !== 'function') return [];
+          const resolved = typeof fileSystem.resolve === 'function' ? await fileSystem.resolve(workingDir) : workingDir;
+          const listed = await fileSystem.listDir(resolved);
+          return (Array.isArray(listed) ? listed : []).map((entry) => ({
+            name: String(entry?.name ?? ''),
+            kind: entry?.type === 'directory' || entry?.kind === 'dir' ? 'dir' : 'file',
+          })).filter((entry) => entry.name !== '');
+        },
+      },
+      /**
+       * The session controls the composer offers: plan mode and the permission
+       * preset.
+       *
+       * Both are other plugins' services and may be absent, and their absence is
+       * meaningful: DSH documents that a missing `permissions` projection means
+       * "clients hide the control". So the capability list and the channels are
+       * built from what is composed, never from what this Host wishes were.
+       */
+      sessionControls: {
+        /**
+         * Whether this Host can switch plan mode for a session.
+         *
+         * Plan mode is preset-owned here, so the question is about the
+         * composition a session gets, and it is answered from evidence in order
+         * of strength: a host-plane service if one exists, a live agent whose
+         * context carries it, then the default preset's composition rows. Only
+         * when none of those can be read does this answer false — and false
+         * hides the control, which is the same silence DSH itself uses for a
+         * missing `permissions` projection.
+         * @returns true when a plan-mode switch exists to be driven.
+         */
+        async planModeSupported() {
+          if (typeof controls.planMode?.set === 'function') return true;
+          const agents = ctx.get('agents');
+          if (typeof agents?.list === 'function') {
+            try {
+              if (agents.list().some((agent) => planModeFor(agent) !== undefined || planCommandAvailable(agent))) return true;
+            } catch {
+              // A registry mid-teardown answers nothing; fall through to the
+              // composition read rather than treating it as "unsupported".
+            }
+          }
+          return presetComposesPlanMode();
+        },
+        /**
+         * Switch plan mode for one session.
+         *
+         * The command registry is the real switch here. Plan mode is composed by
+         * the agent's preset inside its own scope, so `ctx.planMode` is not
+         * reachable from the Host; the `/plan` command that preset registered is,
+         * and it is the exact path the Web composer takes. Its own answer travels
+         * back to the controller rather than being flattened into a success, so a
+         * switch that only lands at the next step is not reported as already on.
+         * @param request - the session to switch and the requested state.
+         * @returns the outcome word, or the command's own result.
+         */
+        async setPlanMode({ sessionId, enabled }) {
+          const resolved = await sessionController.resolveAgent(sessionId);
+          if (resolved?.error !== undefined) throw resolved.error;
+          const agent = resolved.agent;
+          const scoped = planModeInAgentScope(agent);
+          if (typeof scoped?.set === 'function') return scoped.set(agent, enabled === true);
+          if (typeof controls.planMode?.set === 'function') return controls.planMode.set(agent, enabled === true);
+
+          const commands = ctx.get('commands');
+          // A preset that composes no plan mode registers no `/plan`, so the
+          // refusal is per session and about composition, not about this Host.
+          if (typeof commands?.execute !== 'function' || !planCommandAvailable(agent)) {
+            throw new Error('this session composes no plan mode');
+          }
+          const execution = await commands.execute(
+            agent,
+            enabled === true ? '/plan' : '/plan off',
+            [],
+            // The registry's contract takes a caller-owned signal; an unarmed
+            // switch is instant, so a still-unsettled one after 30s is a failure.
+            AbortSignal.timeout(30_000),
+          );
+          if (execution === undefined) throw new Error('the plan command did not resolve');
+          const result = execution?.result;
+          if (result?.kind === 'error') throw new Error(String(result.text ?? 'plan mode switch failed'));
+          return {
+            // The command answers with human text ("Plan mode on." vs "applies
+            // from the next step"), not with DSH's outcome word, so claiming
+            // `committed` here would be a guess. What is known is that the
+            // switch was accepted, and the text says when it lands.
+            outcome: 'accepted',
+            message: typeof result?.text === 'string' ? result.text : undefined,
+          };
+        },
+        /** The advertised preset names, in the preset table's order. */
+        permissionNames: advertisedPermissionNames,
+        setPermissionMode: installPermissionMode,
+      },
+      /**
+       * The aggregated remote file browser the controller's file screen uses.
+       *
+       * A factory rather than an instance: the filesystem service can be replaced
+       * when its plugin reloads, and the reader has to come from whatever is
+       * composed at the moment of the call — the same lesson as every other seam
+       * in this Host.
+       */
+      fileBrowser: () => {
+        const fileSystem = ctx.get('fs');
+        return fileSystem === undefined ? undefined : createFileBrowser({ fileSystem });
+      },
+      source: sessionSource,
+    };
+  }
+
+  const apiProxy = ctx.get('apiProxy');
+  if (apiProxy === undefined) {
+    return { kind: 'api-proxy', readMessages: undefined, createSession: undefined, sendMessage: undefined, source: undefined };
+  }
+  // The legacy adapter is loaded **lazily, and its absence is not fatal**.
+  //
+  // Measured on a clean install (a tarball into a fresh DSH_HOME): a static import here dragged
+  // `@deepseek-ai/dsh-host-apiproxy` in as a hard requirement, its transitive
+  // `@deepseek-ai/dsh-agent-presets` resolved to a copy that does not export `InvalidPresetIdError`,
+  // and **the plugin failed to load at all** — the whole profile would not boot, on a dependency
+  // the current DSH never even uses (it mounts `sessionController`, not `apiProxy`). An optional
+  // capability must not be able to break mounting, so it is required at the moment it is needed
+  // and a failure degrades to "this seam serves nothing" instead of "the tree does not load".
+  try {
+    const require = createRequire(import.meta.url);
+    const { InProcessApiClient, toFetchHandler } = require('@deepseek-ai/dsh-host-apiproxy');
+    return { kind: 'api-proxy', readMessages: undefined, createSession: undefined, sendMessage: undefined, source: new DshHostSource(new InProcessApiClient(toFetchHandler(apiProxy))) };
+  } catch {
+    return { kind: 'api-proxy', readMessages: undefined, createSession: undefined, sendMessage: undefined, source: undefined };
+  }
+}
+
+/**
+ * How long this Host may run with a clean boundary record before that is itself suspicious.
+ *
+ * A boundary that never fires and a boundary that was never installed look identical from the
+ * outside, and the second one is how a whole `dsh web` process dies. So `handlerErrors: []` is
+ * not automatically good news: past this uptime, an empty record means "nothing has exercised
+ * the boundaries yet", which is a fact worth reading rather than a green light.
+ */
+export const BOUNDARY_SILENCE_MS = 10 * 60_000;
+
+/**
+ * The boundary verdict, as one word plus the numbers behind it.
+ * @param options - contained errors, uptime, and the silence threshold.
+ * @returns `{ verdict, contained, uptimeMs }` where verdict is `recovered` | `silent` | `starting`.
+ */
+export function boundaryVerdict({ contained = [], uptimeMs = 0, silenceMs = BOUNDARY_SILENCE_MS } = {}) {
+  const count = Array.isArray(contained) ? contained.length : 0;
+  if (count > 0) return { verdict: 'recovered', contained: count, uptimeMs };
+  return { verdict: uptimeMs >= silenceMs ? 'silent' : 'starting', contained: 0, uptimeMs };
+}
+
+/**
+ * The diagnostics block the status route serves.
+ *
+ * Extracted from `apply` with explicit inputs for one measured reason: the first version read
+ * `sessionSource` from a scope it does not exist in, which threw a `ReferenceError`, and the
+ * status route answers a throwing producer by **omitting `diagnostics` entirely** (its own
+ * test pins that, because the settings page must still load). So a single stale reference
+ * silently removed every counter this Host's bug hunts depend on — no error, no gap in the
+ * JSON, just a shorter body. Here the inputs cannot be guessed wrong, a test calls it, and
+ * each volatile field is read through {@link field} so one broken producer degrades that field
+ * instead of the block.
+ *
+ * @param options - the runtime, the seam kind, the current source seam, and the listing reader.
+ * @returns the diagnostics object, with every key present.
+ */
+export function buildDiagnostics({ runtime, sourceKind, seam, listingDiagnostics, boundaries }) {
+  const field = (read, fallback) => {
+    try {
+      return read();
+    } catch {
+      return fallback;
+    }
+  };
+  return {
+    dataSource: sourceKind,
+    transfers: field(() => runtime?.getTransferDiagnostics?.() ?? null, null),
+    projectionRunning: runtime?.projectionRunning === true,
+    projectedSessions: field(() => (runtime ? runtime.model.list().length : 0), 0),
+    // What a controller actually asked for and what it got back, with the
+    // asking device. Without attribution, polling from another linked
+    // computer reads as if it came from the phone the user is holding.
+    recentInvokes: field(() => (runtime ? runtime.getInvokeLog().slice(-20) : []), []),
+    // Refusals outlive the success ring: a controller polling a transcript
+    // evicts everything else within seconds, and the one refused channel is
+    // the only entry that explains "host failed to serve this channel".
+    recentRefusals: field(() => (runtime ? runtime.getRefusalLog().slice(-30) : []), []),
+    // What went out, and to how many controllers. A push to zero watchers and
+    // a push the controller dropped look identical from the desk, so the
+    // destination count is what makes "the phone never updated" attributable.
+    recentPushes: field(() => (runtime ? runtime.getPushLog().slice(-20) : []), []),
+    // Monotonic per-channel totals. The ring churns during a turn, so a count
+    // taken from it is not evidence that a push happened.
+    pushTotals: field(() => (runtime ? runtime.getPushTotals() : {}), {}),
+    // The same for the request direction: which channels have ever been asked
+    // for, and which of those answers were refusals. `recentInvokes` is a
+    // forty-entry ring and a polling controller evicts it within seconds, so
+    // without this "did the phone ever call X" is unanswerable.
+    invokeTotals: field(() => (runtime ? runtime.getInvokeTotals() : {}), {}),
+    refusalTotals: field(() => (runtime ? runtime.getRefusalTotals() : {}), {}),
+    // The phone's own reading of itself, with arrival times. A controller has no log of its
+    // own: it reports by invoking an unknown channel whose name carries the reading, so every
+    // entry here is a refusal **by design**. Kept apart from the rings above because ordinary
+    // polling evicts them within seconds, and "the app was stuck for 96s starting at 10:37:06"
+    // is exactly the finding that must survive until someone looks.
+    phoneDiagnostics: field(() => (runtime ? runtime.getPhoneDiagnostics() : []), []),
+    // How the transcript's image inlining is actually doing: `attempted` counts the
+    // image handles the reader was handed, `served` the ones whose bytes came back.
+    // A photo that renders as a file chip is one of {no handle on the block, no
+    // attachment service on this profile, a failed read} and only these numbers tell
+    // them apart. `served: 0, attempted: 0` with a photo in the transcript means the
+    // handle never reached the reader at all.
+    attachmentReads: seam?.attachmentReads ?? { attempted: 0, served: 0, failed: 0 },
+    // How the automatic reconnection is doing. "The Host vanished from the phone" and
+    // "the Host was briefly offline and came back on its own" look identical from the
+    // handset, and only this tells them apart.
+    reconnect: field(() => (runtime ? runtime.getReconnectState() : { attempts: 0, pending: false, lastReason: null }), null),
+    // What had to be given up to fit one device-link frame. The relay drops an
+    // oversized frame outright, so a degraded page and a page that never arrived
+    // are indistinguishable from the handset — this is where they differ.
+    frameBudget: field(
+      () => (runtime && typeof runtime.getFrameBudget === 'function'
+        ? runtime.getFrameBudget()
+        : { limitBytes: null, refusals: 0, recentRefusals: [], degradations: [] }),
+      null,
+    ),
+    // Errors this Host caught at its own boundaries. Should stay empty: each entry is an
+    // exception that would otherwise have left the whole `dsh web` process through DSH's
+    // fail-loud unhandled-rejection handler.
+    handlerErrors: field(() => (runtime && typeof runtime.getHandlerErrors === 'function' ? runtime.getHandlerErrors() : []), []),
+    /**
+     * The boundary record, with a verdict rather than just a list.
+     *
+     * `recovered` means the plugin caught something that would otherwise have ended the whole
+     * `dsh web` process — good news, and worth reading. `silent` means the process has been up
+     * past {@link BOUNDARY_SILENCE_MS} without a single boundary firing, which is **not**
+     * automatically healthy: a boundary that is never exercised and one that was never
+     * installed are indistinguishable from here, and `installed` is what tells them apart.
+     */
+    boundaries: field(() => {
+      const contained = runtime && typeof runtime.getHandlerErrors === 'function' ? runtime.getHandlerErrors() : [];
+      const uptimeMs = runtime && typeof runtime.getUptimeMs === 'function' ? runtime.getUptimeMs() : 0;
+      return {
+        ...boundaryVerdict({ contained, uptimeMs }),
+        installed: Array.isArray(boundaries?.installed) ? [...boundaries.installed] : [],
+      };
+    }, { verdict: 'unknown', contained: 0, uptimeMs: 0, installed: [] }),
+    // How the session listing is doing. `staleServes > 0` means a controller was answered
+    // from the previous read because the live one missed its deadline — an absorbed
+    // degradation, and the difference between a rendered list and the reported spinner.
+    listing: field(() => (typeof listingDiagnostics === 'function' ? listingDiagnostics() : null), null),
+    // Rows this Host deliberately did not show the phone. Hidden is not dropped: the count is how
+    // a projection decision stays distinguishable from a lost message.
+    suppressedNotices: field(() => (runtime && typeof runtime.getSuppressedNotices === 'function' ? runtime.getSuppressedNotices() : 0), 0),
+    // The topics controllers currently hold. An empty set means the phone
+    // never subscribed — the single most likely reason a live reply or a todo
+    // card never reaches it.
+    subscriptions: field(() => (runtime ? runtime.getSubscriptions() : { devices: [], sessions: [] }), { devices: [], sessions: [] }),
+  };
+}
+
+/**
+ * The capability provider the channel layer reads.
+ *
+ * Written as explicit fields rather than a spread of the seam's output so that
+ * `kind`/`source` stay out of the channel layer — but that means a capability
+ * the seam produces can be built and never forwarded, which is exactly what
+ * happened to `queueControl`: every queue button answered NOT_AVAILABLE while
+ * the implementation sat right there. `dsh-plugin.test.js` now asserts that
+ * every capability the seam builds arrives here.
+ * @param sources - the capabilities one source seam produced.
+ * @returns the provider `startHost` resolves per request.
+ */
+export function capabilityProvider(sources) {
+  return {
+    readMessages: sources.readMessages,
+    readAllMessages: sources.readAllMessages,
+    inputDeliveryBackend: sources.inputDeliveryBackend,
+    countMessages: sources.countMessages,
+    // The work-grouped history window the controller reaches for once it has seen
+    // `history-view-v1`; without this forwarding the three channels would answer
+    // NOT_AVAILABLE while the controller sat right here (the `queueControl` failure).
+    historyView: sources.historyView,
+    attachmentReads: sources.attachmentReads,
+    readAttachmentSource: sources.readAttachmentSource,
+    // Internal (the live push path), but it crosses the same seam, so it is forwarded here: the
+    // invariant test in `test/dsh-plugin.test.js` requires every seam key to be reachable, and a
+    // key that exists but is reachable from nowhere is exactly the bug class this repo keeps
+    // closing.
+    hydrateImages: sources.hydrateImages,
+    createSession: sources.createSession,
+    sendMessage: sources.sendMessage,
+    renameSession: sources.renameSession,
+    files: sources.files,
+    goalWrite: sources.goalWrite,
+    queueControl: sources.queueControl,
+    modelCatalog: sources.modelCatalog,
+    regenerateTitle: sources.regenerateTitle,
+    contextUsage: sources.contextUsage,
+    selectModel: sources.selectModel,
+    setEffort: sources.setEffort,
+    readSessionState: sources.readSessionState,
+    ensureAgent: sources.ensureAgent,
+    palette: sources.palette,
+    sessionControls: sources.sessionControls,
+    sessionArchive: sources.sessionArchive,
+    manualCompact: sources.manualCompact,
+    forkSession: sources.forkSession,
+    keywordSearch: sources.keywordSearch,
+    backgroundJobs: sources.backgroundJobs,
+    subagentReads: sources.subagentReads,
+    reminders: sources.reminders,
+    projectOrder: sources.projectOrder,
+    referenceHistory: sources.referenceHistory,
+    fileBrowser: sources.fileBrowser,
+  };
+}
+
+/**
+ * Build the controller's goal writer from the two contexts that supply it.
+ *
+ * Both services come from other plugins and activate independently, so this
+ * reads them off the injected contexts rather than closing over anything: the
+ * first version referenced a `buildDshSource` local, which threw
+ * `sessionController is not defined` at call time — a failure no unit test of
+ * the writer could see, because it only exists once the wiring runs.
+ * @param sourceCtx - the context that carries `sessionController`.
+ * @param goalCtx - the context that carries `goals`.
+ * @returns the writer the goal channels call.
+ */
+export function buildGoalWrite(sourceCtx, goalCtx) {
+  const controller = sourceCtx.get('sessionController');
+  return createGoalWriter({
+    goals: goalCtx.get('goals'),
+    resolveAgent: typeof controller?.resolveAgent === 'function'
+      ? (sessionId) => controller.resolveAgent(sessionId)
+      : undefined,
+  });
+}
+
+/**
+ * Read creation times and working directories from the session headers.
+ *
+ * `SessionSummary` carries neither `createdAt` nor a durable cwd, but the phone's
+ * session row requires a creation time.
+ */
+export async function readSessionMeta(sessionQuery, sessionIds) {
+  const records = await sessionQuery.listSessions();
+  const wanted = new Set(sessionIds);
+  const meta = new Map();
+  for (const record of Array.isArray(records) ? records : []) {
+    const header = record?.header;
+    if (header === undefined || !wanted.has(header.id)) continue;
+    meta.set(header.id, {
+      createdAt: Number.isFinite(header.createdAt) ? new Date(header.createdAt).toISOString() : undefined,
+      cwd: typeof header.cwd === 'string' && header.cwd !== '' ? header.cwd : null,
+    });
+  }
+  return meta;
+}
+
+/**
+ * Fold a batch title read into a `Map<sessionId, title>`.
+ *
+ * The nesting is the trap: `readTitleSnapshots` answers
+ * `{ sessionId, status, value }`, where `value` is a `SessionTitleObservation`
+ * whose `title` is a `SessionTitleSnapshot` — so the text is at
+ * `value.title.title`, two levels below a field that already reads like a title.
+ * Reading `value.title` as a string silently yields an object, which fails a
+ * `typeof === 'string'` guard and leaves every session unnamed.
+ *
+ * A rejected entry is one session's failure, not the batch's: titles are row
+ * decoration, so the rest still come through.
+ */
+export function foldTitleSnapshots(results) {
+  const titles = new Map();
+  const rows = Array.isArray(results) ? results : [];
+  for (const row of rows) {
+    if (row === null || typeof row !== 'object' || row.status !== 'fulfilled') continue;
+    const snapshot = row.value?.title;
+    const text = typeof snapshot?.title === 'string' ? snapshot.title : null;
+    if (typeof row.sessionId === 'string' && text !== null && text.trim() !== '') {
+      titles.set(row.sessionId, text.trim());
+    }
+  }
+  return titles;
+}
+
+async function readTitles(sessionQuery, sessionIds) {
+  return foldTitleSnapshots(await sessionQuery.readTitleSnapshots(sessionIds));
+}
+
+/**
+ * The settings write for the archive/delete/pin flags.
+ *
+ * **`mutate` with one `set` op, never `update`.** `update` deep-merges its patch into
+ * the namespace's user section, so it cannot express a removal: un-archiving a session
+ * writes "no flags for this session", which merges into nothing and leaves the archived
+ * flag still on disk — where the next settings commit re-seeds it and the session
+ * silently stays hidden. Measured on the live Host: archived → restored → *still*
+ * `archived`, with the stale flag reloaded from the file. A path-addressed `set`
+ * replaces the field exactly, which is what a snapshot write means.
+ *
+ * @param settings - the `settings` service.
+ * @param ns - this bundle's namespace, as registered.
+ * @returns the writer the runtime persists through.
+ */
+export function sessionFlagsWriter(settings, ns) {
+  return (sessionFlags) => settings.mutate(ns, [{ op: 'set', path: ['sessionFlags'], value: sessionFlags }]);
+}
+
+/**
+ * The settings seam, for both DSH generations this bundle supports.
+ *
+ * **0.1.x**: `settings.register(ns, schema, options)` publishes a plugin's settings and returns
+ * a live scope (`get`/`watch`/`update`/`replace`). The registration is *also* what makes
+ * `update(ns, …)` and `mutate(ns, …)` accept this namespace — their write path looks the
+ * namespace up in the provider's registration table.
+ *
+ * **0.2 removed `register`.** The host now reads the plugin **entry's own `Config`** schema
+ * (`SettingsForms.describe()`, keyed by **profile entry id**), resolves it, and hands the value
+ * to `apply(ctx, config)`; `update`/`mutate` address that same entry id. This bundle's row is
+ * `- id: dsh-cindy-host` (see `cordis.patch.yml`), so `SETTINGS_NAMESPACE` names the same
+ * surface under both models — only the way the plugin obtains it differs. Hence one seam with
+ * two branches instead of two code paths through the rest of the plugin.
+ *
+ * The returned object always has the 0.1.x scope shape, so every consumer below is
+ * generation-agnostic.
+ *
+ * @param ctx - the plugin context that owns the `settings` service.
+ * @param entryId - the namespace (0.1.x) / profile entry id (0.2) this bundle writes.
+ * @param projected - the host-resolved `Config` value; only 0.2 supplies it.
+ * @returns the settings scope described above.
+ */
+export function createSettingsScope(ctx, entryId, projected) {
+  const { settings } = ctx;
+  if (typeof settings.register === 'function') {
+    return settings.register(entryId, HostSchema, { base: DEFAULT_HOST_SETTINGS, applies: 'live', validate: validateHostSettings });
+  }
+  if (projected === undefined) throw new Error('dsh-cindy-host: the host resolved no Config for this entry, so there is nowhere to read settings from');
+  // Volatile Config is updated WITHOUT remounting the plugin. Keep a detached
+  // snapshot and re-read the settings owner's resolved value after its event;
+  // copying apply(config) once left the relay disabled after the UI enabled it.
+  const snapshot = (value) => {
+    const next = JSON.parse(JSON.stringify({ ...DEFAULT_HOST_SETTINGS, ...value }));
+    validateHostSettings(next);
+    return next;
+  };
+  let current = snapshot(projected);
+  const watchers = new Set();
+  const report = (error) => ctx.logger?.warn?.(`dsh-cindy-host settings: a watcher failed and was contained: ${String(error)}`);
+  const publish = (next) => {
+    if (JSON.stringify(current) === JSON.stringify(next)) return;
+    current = next;
+    for (const callback of [...watchers]) {
+      try {
+        // Runtime updates are asynchronous. A synchronous try/catch alone does
+        // not contain a rejection from starting or stopping the relay.
+        Promise.resolve(callback(next)).catch(report);
+      } catch (error) {
+        report(error);
+      }
+    }
+  };
+  let refreshing = false;
+  const refresh = () => {
+    if (refreshing) return; // describe may itself emit document-updated.
+    refreshing = true;
+    try {
+      const descriptor = settings.describe().find((row) => row.ns === entryId);
+      if (descriptor !== undefined) publish(snapshot(descriptor.value));
+    } finally {
+      refreshing = false;
+    }
+  };
+
+  return {
+    get: () => current,
+    refresh,
+    watch: (callback) => {
+      watchers.add(callback);
+      return () => watchers.delete(callback);
+    },
+    update: async (patch) => {
+      await settings.update(entryId, patch);
+      refresh(); // Use resolved values, not an invented shallow merge.
+    },
+    replace: async (section) => {
+      await settings.replace(entryId, section);
+      refresh();
+    },
+  };
+}
+
+
+/**
+ * Forward once to DSH and settle both surfaces through the existing registry.
+ * The losing native card is dismissed through its private cancellation signal.
+ */
+export async function arbitrateInteraction({ request, next, begin, settleLocal }) {
+  const downstreamAbort = new AbortController();
+  const upstreamSignal = request?.signal;
+  const downstreamSignal = upstreamSignal === undefined
+    ? downstreamAbort.signal
+    : AbortSignal.any([upstreamSignal, downstreamAbort.signal]);
+  try {
+    request.signal = downstreamSignal;
+  } catch {
+    try {
+      Object.defineProperty(request, 'signal', { value: downstreamSignal, configurable: true, writable: true });
+    } catch {
+      // Without cancellation, use the original native path rather than a phone-only card.
+      return next();
+    }
+  }
+  if (request.signal !== downstreamSignal) return next();
+  const handle = await begin(upstreamSignal);
+  if (handle === null) return next();
+
+  void Promise.resolve().then(next).then(
+    (value) => settleLocal(handle.requestId, value),
+    (error) => {
+      // Native cancellation/timeout is a lifecycle result, not a failed delivery.
+      // A missing/disconnected local answerer still leaves the phone usable.
+      if (error?.name === 'UserQuestionError' && error.code !== 'NO_PROVIDER') handle.cancel?.(error);
+    },
+  ).catch((error) => handle.cancel?.(error));
+  try {
+    // A rejected late local settlement cannot override an already accepted phone answer.
+    return await handle.answered;
+  } finally {
+    downstreamAbort.abort(new Error('interaction settled'));
+  }
+}
+
+export function apply(ctx, config) {
+  const scope = createSettingsScope(ctx, settingsNamespace(SETTINGS_NAMESPACE), config);
+  let runtime;
+  let nativeCredentials;
+  const credentialPorts = createCredentialStore({ getCredentials: () => nativeCredentials });
+  // The source can arrive before OR after the runtime: `startHost` awaits a
+  // Cindy session before resolving, while `ctx.inject` fires the moment the DSH
+  // service activates. Holding it here and re-applying after the await covers
+  // both orders — dropping it when `runtime` was still undefined is what left
+  // the projection permanently stopped in the first wiring attempt.
+  let currentSource;
+  /**
+   * The whole seam output, forwarded as one object.
+   *
+   * This used to be a hand-maintained field list, and it was the bug twice:
+   * `queueControl` was built and left out (every queue button answered
+   * NOT_AVAILABLE), and then `setEffort` was built, forwarded through
+   * `capabilityProvider`, and left out here — so the phone's effort picker
+   * answered NOT_AVAILABLE on a Host that advertises four effort levels.
+   * `capabilityProvider` is the single place that decides what the channel layer
+   * may see, so the seam output travels whole.
+   */
+  let currentSeam = {};
+  /**
+   * Every listener this plugin hands to the host, and the entry point that wraps it.
+   *
+   * Cordis's `emit` dispatch has no `try`/`catch`, and its `waterfall` hands a listener's
+   * returned promise straight back to DSH — so one throw or rejection from any of these is not
+   * a degraded plugin, it is a dead `dsh web`: DSH's boot registers an unhandled-rejection
+   * handler that writes `fatal load failure` to stderr and calls `process.exit(1)`. Measured
+   * once already (`RemoteError: queued item is no longer pending` took the whole desktop down).
+   *
+   * So each registration goes through {@link guarded}, which names it and contains whatever it
+   * throws. `test/plugin-boundaries.test.js` scans this file and fails when a `ctx.on(`
+   * registration does not go through it — an unwrapped boundary has to be a test failure rather
+   * than something a reviewer has to notice.
+   */
+  const guardedListeners = [];
+
+  /** Record one contained boundary failure, before or after the runtime exists. */
+  const earlyBoundaryErrors = [];
+  function noteBoundaryError(where, error) {
+    if (runtime != null && typeof runtime.noteHandlerError === 'function') {
+      runtime.noteHandlerError(where, error);
+      return;
+    }
+    earlyBoundaryErrors.push({
+      at: new Date().toISOString(),
+      where,
+      message: (error instanceof Error ? error.message : String(error)).slice(0, 400),
+    });
+    if (earlyBoundaryErrors.length > 20) earlyBoundaryErrors.shift();
+  }
+
+  /**
+   * Record failures; contain side effects but propagate awaited question failures.
+   * @param label - what this listener is, for the diagnostics record.
+   * @param listener - the listener as written.
+   * @param options - rethrow only for awaited requests, never fire-and-forget events.
+   * @returns the guarded listener.
+   */
+  function guarded(label, listener, { rethrow = false } = {}) {
+    guardedListeners.push(label);
+    return (...args) => {
+      try {
+        const result = listener(...args);
+        if (result !== null && typeof result === 'object' && typeof result.then === 'function') {
+          // Awaited questions reach userQuestions.ask so cancellation keeps its
+          // meaning; fire-and-forget side effects still contain their failures.
+          return result.catch((error) => {
+            noteBoundaryError(label, error);
+            if (rethrow) throw error;
+            return undefined;
+          });
+        }
+        return result;
+      } catch (error) {
+        noteBoundaryError(label, error);
+        if (rethrow) throw error;
+        return undefined;
+      }
+    };
+  }
+
+  /** The boundary record for diagnostics: what is installed, and what it has contained. */
+  function boundaryState() {
+    const contained = runtime != null && typeof runtime.getHandlerErrors === 'function'
+      ? runtime.getHandlerErrors()
+      : earlyBoundaryErrors;
+    return { installed: [...guardedListeners], contained: contained.slice() };
+  }
+
+  /**
+   * The current source's listing diagnostics, or a null answer.
+   *
+   * Held here rather than read from `currentSeam`: the first version reached for the
+   * session source by name from inside `getDiagnostics`, where it is out of scope, and the
+   * resulting `ReferenceError` made the status route drop **its whole diagnostics block**
+   * (that route answers a throwing producer by omitting the field, so the settings page still
+   * loads). One stale reference, and every counter a bug hunt needs was gone with no error to
+   * show for it. The seam output also travels whole into the channel layer, which is asserted
+   * by an invariant test — a diagnostics accessor is not a capability and does not belong there.
+   */
+  let currentListingDiagnostics = () => null;
+  /** The controller's file reads, once a filesystem service is composed. */
+  let currentFiles;
+  /** The controller's goal writes, once a goal service is composed. */
+  let currentGoalWrite;
+  // Which seam supplied the source, for the status route's diagnostics. Without
+  // it a silent `none` looks identical to "this profile has no sessions yet".
+  let sourceKind = 'none';
+
+  if (typeof scope.refresh === 'function') {
+    ctx.on('settings/document-updated', guarded('settings-document-updated', (namespace) => {
+      if (namespace === SETTINGS_NAMESPACE) scope.refresh();
+    }));
+  }
+
+  // Only Windows needs DSH persistence; missing/late service must not break mounting.
+  ctx.inject(['credentials'], (credentialCtx) => {
+    credentialCtx.effect(() => {
+      const provider = credentialCtx.get?.('credentials') ?? credentialCtx.credentials;
+      nativeCredentials = provider;
+      if (runtime && scope.get().transportEnabled) {
+        void Promise.resolve().then(() => rebuildRuntime())
+          .catch(error => noteBoundaryError('credential-store-ready', error));
+      }
+      return () => { if (nativeCredentials === provider) nativeCredentials = undefined; };
+    });
+  });
+
+  let runtimeQueue = Promise.resolve();
+  let runtimeDisposed = false;
+  let disposeLoginRoutes = async () => {};
+  function rebuildRuntime(_session, lease = () => true) {
+    const replacement = runtimeQueue.catch(() => {}).then(async () => {
+      if (runtimeDisposed || !lease()) return;
+      const previous = runtime; runtime = undefined;
+      if (previous) await previous.stop();
+      if (runtimeDisposed || !lease()) return;
+      let admitted = false;
+      const next = await startHost(undefined, scope.get(), {
+        credentialPorts,
+        // A provider, not a snapshot: these callbacks come from the injected
+        // session service, which activates after `startHost` already awaited a
+        // Cindy session. Capturing them here would freeze an empty set and make a
+        // capable Host answer NOT_AVAILABLE forever.
+        resolveCapabilities: () => capabilityProvider({
+          ...currentSeam,
+          // The two capabilities that come from *other* injections rather than
+          // from the seam: the filesystem, and the goal service's writer.
+          files: currentFiles,
+          goalWrite: currentGoalWrite,
+        }),
+        // Delete/pin and old archive overlays persist here; new archives live in
+        // DSH's native workspace registry, not this plugin's settings section.
+        persistSessionFlags: sessionFlagsWriter(ctx.settings, settingsNamespace(SETTINGS_NAMESPACE)),
+        diagnosticPreferences: diagnosticPreferenceStore(ctx.settings, settingsNamespace(SETTINGS_NAMESPACE)),
+        inputDeliveryDirectory: join(process.env.DSH_PROFILE_DIR || join(process.env.DSH_HOME || join(homedir(), '.dsh'), 'profiles', process.env.DSH_PROFILE || 'desktop'), 'state', 'dsh-cindy-host'),
+
+        identityIsCurrent: () => admitted || (!runtimeDisposed && lease()),
+      });
+      if (runtimeDisposed || !lease()) { await next.stop(); return; }
+      runtime = next; admitted = true;
+      await next.updateSettings(scope.get());
+      if (currentSource !== undefined) await next.setSource(currentSource);
+      return next;
+    });
+    runtimeQueue = replacement; return replacement;
+  }
+  ctx.effect(async () => {
+    await rebuildRuntime();
+    return async () => {
+      runtimeDisposed = true;
+      await disposeLoginRoutes();
+      await runtimeQueue.catch(() => {});
+      await runtime?.stop();
+    };
+  }, 'dsh-cindy-host runtime');
+  ctx.effect(() => scope.watch((settings) => runtime?.updateSettings(settings)), 'dsh-cindy-host settings');
+
+  // Attach the DSH read source whenever a supplier activates, and detach it if
+  // that supplier goes away — a reload of the session API must not leave the
+  // projection reading a dead service.
+  for (const serviceName of SOURCE_SERVICES) {
+    ctx.inject([serviceName], (sourceCtx) => {
+      const built = buildDshSource(sourceCtx, serviceName, {
+        subscribe: (event, listener) => sourceCtx.on(event, guarded(event, listener)),
+        // Read lazily: the runtime resolves after this seam is built, and the state changes on
+        // every turn boundary.
+        isSessionRunning: (sessionId) => runtime?.isSessionRunning?.(sessionId) === true,
+        projectMessages: rows => runtime?.projectMessages?.(rows) ?? rows,
+        getProjectOrderOwner: () => runtime?.getProjectOrderOwner?.(),
+      });
+      // The filesystem is a separate service; the controller's file reads are
+      // only wired when this profile composes one.
+      const fileSystem = sourceCtx.get('fs');
+      if (fileSystem !== undefined) {
+        const reader = createFileReader({ fileSystem });
+        currentFiles = () => reader;
+      }
+      // Goal writes need a live `Agent`, which only this controller can hand out.
+      // `goals` is a separate plugin that may activate later, so it is injected
+      // rather than read here: a missing goal service must leave the channels
+      // answering NOT_AVAILABLE, not make this Host look like it has no source.
+      sourceCtx.inject(['goals'], (goalCtx) => {
+        currentGoalWrite = buildGoalWrite(sourceCtx, goalCtx);
+        return () => {
+          currentGoalWrite = undefined;
+        };
+      });
+      currentSource = built.source;
+      // The seam output travels whole; see `currentSeam`.
+      currentSeam = built;
+      sourceKind = built.kind;
+      // Bound next to the source it describes, because this is the only scope that has it.
+      currentListingDiagnostics = () => (typeof built.source?.listDiagnostics === 'function' ? built.source.listDiagnostics() : null);
+      // The runtime may not have resolved yet; it applies the pending source
+      // after its own await, and picks up the readers at construction.
+      void runtime?.setSource(currentSource);
+      // The input queue and jobs arrive as an AsyncIterable, not a query:
+      // consume it for as long as the service is composed and fold each frame
+      // into the runtime, which is what `maker:input:get-projection` reads.
+      const controllerAbort = new AbortController();
+      void (async () => {
+        try {
+          for await (const frame of sessionController.control(controllerAbort.signal)) {
+            if (controllerAbort.signal.aborted || currentSource !== built.source) break;
+            runtime?.applyControlFrame(frame);
+          }
+        } catch {
+          // A broken control stream costs the queue panel, never the session.
+        }
+      })();
+      sourceCtx.effect(() => () => controllerAbort.abort(), `dsh-cindy-host: ${built.kind} control stream`);
+      sourceCtx.effect(() => () => {
+        built.manualCompact?.dispose();
+        built.forkSession?.dispose();
+        built.keywordSearch?.dispose();
+        built.backgroundJobs?.dispose();
+        built.subagentReads?.dispose();
+        built.reminders?.dispose();
+        built.projectOrder?.dispose();
+        built.referenceHistory?.dispose();
+        if (sourceKind === built.kind) sourceKind = 'none';
+        currentSource = undefined;
+        currentSeam = {};
+        currentListingDiagnostics = () => null;
+        currentFiles = undefined;
+        void runtime?.setSource(undefined);
+      }, `dsh-cindy-host: ${built.kind} source`);
+    });
+  }
+
+  // The live session stream. `session/event` fires for every appended event, so
+  // it is the push path's source: fold the event into the controller's message
+  // rows and hand them to whoever is watching that session.
+  ctx.effect(() => ctx.on('session/event', guarded('session-event', async (session, event) => {
+    // This handler runs inside Cordis's own dispatch, which has no `try`/`catch`: a throw
+    // from here does not fail this plugin, it fails the process — DSH's boot installs an
+    // unhandled-rejection handler that writes `fatal load failure` and calls `exit(1)`. The
+    // work below reads DSH's session events and folds them, so it is exactly where an
+    // unexpected event shape surfaces; it must never be able to take the desktop down.
+    await handleSessionEvent(session, event);
+  })), 'dsh-cindy-host: live session stream');
+
+  /** Fold one DSH session event into the push path and the transcript cache. */
+  async function handleSessionEvent(session, event) {
+    if (!runtime || typeof runtime.pushSessionMessage !== 'function') return;
+    const sessionId = session?.header?.id;
+    if (typeof sessionId !== 'string' || sessionId === '') return;
+    // DSH's own turn boundaries are the authority for the phone's spinner.
+    //
+    // The projection's running flag is *not*: `api-session/status` reports
+    // `running: false` for a moment between a prompt being accepted and its turn
+    // really starting, and announcing that as the end produced a `done` **31 ms
+    // after a live turn began** — the controller finalized its streaming rows and
+    // stopped its timer while the agent was still generating. `turn/start` and
+    // `turn/end` are the boundaries that mean what the phone reads into them.
+    if (event?.type === 'turn/start' && typeof runtime.pushTurnRunning === 'function') {
+      runtime.pushTurnRunning(sessionId, event);
+    }
+    // A real boundary needs no fallback, and arming one here is not harmless: this
+    // handler runs *after* the boundary was announced, so it re-armed the very
+    // timer the boundary had just cancelled and sent a duplicate `done` 1.5s later.
+    const boundaryArrived = event?.type === 'turn/start' || event?.type === 'turn/end';
+    // The prompt is now a durable message, so DSH's inbox no longer holds it and
+    // the controller's optimistic queue row has to go — otherwise it shows
+    // "队列中" for a message the agent already answered.
+    const rpcId = promptRpcIdOf(event);
+    if (rpcId !== null && typeof runtime.retireQueuedItem === 'function') runtime.retireQueuedItem(sessionId, rpcId);
+    // The transcript cache is kept current for **every** session, watched or not.
+    //
+    // It is what makes paging cheap (`createMessageReader`): one full read seeds it,
+    // and each appended event extends it, so a "load earlier" page costs O(page)
+    // instead of re-reading and re-folding a whole session log — measured at 216 ms
+    // warm and 2.3 s during a live turn on the 17 MB conversation the user reported
+    // as 加载更早消息…每次只加载一点点. Skipping unwatched sessions would be wrong: the
+    // cache's whole value is that it never needs re-reading, and the controller
+    // reaches for a session's history through a fresh subscription, not through a
+    // stream this process was already following.
+    const reasoningWatched = runtime.watchersFor(sessionId) > 0;
+    const reasoningBefore = reasoningWatched ? currentSeam?.readMessages?.reasoningRows?.(sessionId) : null;
+    if (currentSeam !== undefined && currentSeam !== null && typeof currentSeam.readMessages === 'function'
+      && typeof currentSeam.readMessages.noteEvent === 'function') {
+      currentSeam.readMessages.noteEvent(sessionId, event);
+      currentSource?.invalidateActivityEvidence?.(sessionId);
+    }
+    // Make the failed history row readable before publishing its terminal identity.
+    // Everything above is synchronous, so a new turn cannot interleave here.
+    if (event?.type === 'turn/end' && typeof runtime.pushTurnIdle === 'function') runtime.pushTurnIdle(sessionId, event);
+    if (typeof runtime.pushSessionDiagnostic === 'function') runtime.pushSessionDiagnostic(sessionId, event);
+    // Chunks are intentionally absent from deriveEventMessage. Publish a temporary
+    // thinking overlay too, retiring it before the durable assistant rows below.
+    runtime.pushSessionReasoning?.(sessionId, event, {
+      before: reasoningBefore, after: reasoningWatched ? currentSeam?.readMessages?.reasoningRows?.(sessionId) : null,
+    });
+    // A harness notice is hidden from the phone (the fold returns no rows for it), and the count is
+    // what keeps that hiding honest: "there was nothing to show" and "the Host dropped a message"
+    // must not look alike from the desk.
+    if (isHarnessNotice(event) && typeof runtime.noteSuppressedNotice === 'function') runtime.noteSuppressedNotice();
+    // Nothing to do unless a controller is watching; the fold is not free.
+    if (runtime.watchersFor(sessionId) === 0) return;
+    // Awaited, because `pushSessionMessage` inlines the row's images first: a photo has to be
+    // renderable in the frame that carries it, not one read later.
+    for (const row of foldSessionEvent(event, { sessionId })) await runtime.pushSessionMessage(sessionId, row);
+    // A durable message is a second witness that something happened, so it also
+    // schedules the one check that makes sure the spinner cannot outlive the
+    // turn it was watching — unless this event *was* the boundary.
+    if (!boundaryArrived && typeof runtime.reconcileTurnState === 'function') runtime.reconcileTurnState(sessionId);
+  }
+
+  // DSH raises approvals as a waterfall and the chain's terminal answerer is
+  // fail-closed. This answerer only serves questions for sessions a Cindy
+  // controller is watching; in every other case it calls `next()` so the local
+  // UI — or the fail-closed default — decides. Swallowing a question the user
+  // could have answered at the desk would be worse than not answering at all.
+  ctx.effect(() => ctx.on('approval/request', guarded('approval-request', async (req, next) => {
+    if (!runtime || typeof runtime.beginApproval !== 'function') return next();
+    const sessionId = req?.agent?.session?.header?.id;
+    return arbitrateInteraction({
+      request: req,
+      next,
+      begin: (signal) => runtime.beginApproval({
+        sessionId: typeof sessionId === 'string' ? sessionId : '',
+        toolName: typeof req?.toolName === 'string' ? req.toolName : '',
+        reason: req?.reason,
+        callId: req?.callId,
+        signal,
+      }),
+      settleLocal: (requestId, outcome) => runtime.settleInteractionOutcome(requestId, outcome),
+    });
+    // `prepend` and `global` are both REQUIRED, and this is the difference between
+    // a phone that can answer a card and one that never sees one.
+    //
+    // `global`: DSH dispatches these waterfalls at the **agent's** scope
+    // (`scopeTarget(agent, agent)`), and Cordis admits a listener to a filtered
+    // dispatch only when it is global, untagged, or tagged with the dispatch key or
+    // an ancestor (`EventsService.dispatch` → `hook.global || !filter || …`).
+    //
+    // `prepend`: the Web bundle composes `dsh-api-remotes`, which registers its own
+    // listener on this same event and **parks the chain** while it waits for a
+    // browser client to answer (`forwardWaterfall` holds a `Promise.withResolvers()`
+    // and never calls `next()` until that remote answers). Registered after it, this
+    // answerer never got a turn: the tool call simply hung, the session stayed
+    // `running`, and the phone showed nothing. Going first means a Cindy controller
+    // answers when one is watching; when none is, `next()` hands the question back
+    // to the browser path unchanged.
+  }), { prepend: true, global: true }), 'dsh-cindy-host: approval answerer');
+
+  // Questions are registered even before a phone opens the session, then also
+  // forwarded to DSH. Unlike side-effect listeners this awaited waterfall must
+  // propagate cancellation instead of returning an undefined successful result.
+  ctx.effect(() => ctx.on('user-questions/request', guarded('user-questions-request', async (request, next) => {
+    if (!runtime || typeof runtime.beginUserQuestion !== 'function') return next();
+    const sessionId = request?.agent?.session?.header?.id;
+    return arbitrateInteraction({
+      request,
+      next,
+      begin: (signal) => runtime.beginUserQuestion({
+        sessionId: typeof sessionId === 'string' ? sessionId : '',
+        questions: request?.questions,
+        signal,
+      }),
+      settleLocal: (requestId, outcome) => runtime.settleInteractionOutcome(requestId, outcome),
+    });
+    // Same `prepend` + `global` requirement as the approval answerer above, and the
+    // same reason: this waterfall is agent-scoped and the Web bundle's remote
+    // forwarding listener parks ahead of a late registration.
+  }, { rethrow: true }), { prepend: true, global: true }), 'dsh-cindy-host: user-question answerer');
+
+  // The settings page reaches the Host through this route. `webServer` is absent
+  // in headless compositions, so the row is injected optionally: the runtime and
+  // its settings still work, only the browser surface is missing.
+  const routes = createHostRoutes({
+    credentialPorts,
+    onAuthenticated: rebuildRuntime,
+    getRuntime: () => runtime,
+    getDiagnostics: () => buildDiagnostics({ runtime, sourceKind, seam: currentSeam, listingDiagnostics: currentListingDiagnostics, boundaries: boundaryState() }),
+    // The Host's own relay identity outlives the credential: a phone links to the
+    // *device id*, so it is remembered here and reused when the credential is gone.
+    getSettings: () => scope.get(),
+    rememberDeviceId: (deviceId) => scope.update({ deviceId }),
+  });
+  disposeLoginRoutes = () => routes.dispose();
+  ctx.inject(['webServer'], (webCtx) => {
+    webCtx.effect(
+      () => webCtx.webServer.register({ kind: 'prefix', path: API_PREFIX, handler: routes.handle }),
+      'dsh-cindy-host: settings-page API',
+    );
+  });
+}
