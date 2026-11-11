@@ -25,7 +25,7 @@ test('workspace titles become local: aliases and untitled workspaces fall back t
   const snapshot = f.port.read();
   assert.deepEqual(snapshot.aliases, [
     { projectKey: 'local:/Users/me/投资', alias: '财务' },
-    { projectKey: 'local:/Users/me/default-workspace', alias: 'default-workspace' },
+    { projectKey: 'local:/Users/me/default-workspace', alias: '默认工作区' },
   ]);
   assert.equal(snapshot.platform, process.platform);
   assert.deepEqual(snapshot.ownerStamp, { dataOwnerId: 'verified-account-device-source', ownerGeneration: 1 });
@@ -113,4 +113,15 @@ test('wrong argument counts are refused', async () => {
     assert.equal(answer.payload.ok, false);
     assert.equal(answer.payload.error.code, 'BAD_REQUEST');
   }
+});
+
+test('the default workspace is shown with the same name the DSH sidebar uses', () => {
+  const f = fixture([
+    { id: '1', path: '/Users/me/default-workspace', title: 'default-workspace' },
+    { id: '2', path: '/Users/me/finance', title: '财务' },
+  ]);
+  assert.deepEqual(f.port.read().aliases, [
+    { projectKey: 'local:/Users/me/default-workspace', alias: '默认工作区' },
+    { projectKey: 'local:/Users/me/finance', alias: '财务' },
+  ]);
 });

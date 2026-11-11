@@ -28,6 +28,20 @@ const MAX_SNAPSHOT_BYTES = 256 * 1024;
 
 const unavailable = () => ({ aliases: [], platform: process.platform });
 
+/**
+ * Titles DSH itself shows in another language.
+ *
+ * The default Workspace is stored as `default-workspace` but the desktop sidebar
+ * renders it as 「默认工作区」; the phone should read the same thing the user sees,
+ * not the storage key.
+ */
+const DISPLAY_TITLE_OVERRIDES = new Map([["default-workspace", "默认工作区"]]);
+
+function displayTitle(value) {
+  const title = cleanAlias(value);
+  return DISPLAY_TITLE_OVERRIDES.get(title) ?? title;
+}
+
 function cleanAlias(value) {
   if (typeof value !== 'string') return '';
   // Titles are user text: flatten line breaks/control characters and cap the length
@@ -59,7 +73,7 @@ export function createDshProjectAliases({ getRegistry, getOwner, subscribeChange
       let projectKey;
       try { projectKey = projectOrderKey(row.path); } catch { continue; } // relative / unkeyable path: skip, never guess
       if (seen.has(projectKey)) continue; // ambiguous grouping: first registered wins, the rest are dropped
-      const alias = cleanAlias(row.title);
+      const alias = displayTitle(row.title);
       if (alias === '') continue; // no human title: the controller's own basename fallback is correct
       seen.add(projectKey);
       aliases.push({ projectKey, alias });

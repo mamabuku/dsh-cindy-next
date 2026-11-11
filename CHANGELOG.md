@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.9 — 2026-11-11 (dsh-cindy-next)
+
+- The default Workspace is shown on the phone as 「默认工作区」, the name DSH's own sidebar renders, instead of the storage key `default-workspace`.
+
 ## 0.1.8 — 2026-11-11 (dsh-cindy-next)
 
 - The phone's project list now matches the DSH sidebar: sidebar discovery only lists sessions that live in a registered Workspace, so agent scratch directories and one-off temp folders no longer appear as phantom projects. `getSession` still answers any session id, so opening a session directly is unaffected.

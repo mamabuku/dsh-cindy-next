@@ -37,7 +37,7 @@ Cindy 手机 ── DeviceLink ──▶ Cindy relay ──▶ 本插件（DSH H
 ## 安装
 
 ```sh
-dsh plugin --profile <profile> add ./dsh-cindy-next-0.1.8.tgz
+dsh plugin --profile <profile> add ./dsh-cindy-next-0.1.9.tgz
 ```
 
 或从 DSH 插件市场安装。装完 **重启 DSH** 才生效。
