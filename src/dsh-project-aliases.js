@@ -1,6 +1,6 @@
 import { refusalError } from './cindy-channels.js';
 import { projectOrderKey } from './dsh-project-order.js';
-import { UNFILED_PROJECT_PATH } from './dsh-session-source.js';
+import { UNFILED_PROJECT_PATH, displayProjectName } from './project-names.js';
 
 /**
  * Project display names, as Cindy's sidebar expects them.
@@ -29,19 +29,6 @@ const MAX_SNAPSHOT_BYTES = 256 * 1024;
 
 const unavailable = () => ({ aliases: [], platform: process.platform });
 
-/**
- * Titles DSH itself shows in another language.
- *
- * The default Workspace is stored as `default-workspace` but the desktop sidebar
- * renders it as 「默认工作区」; the phone should read the same thing the user sees,
- * not the storage key.
- */
-const DISPLAY_TITLE_OVERRIDES = new Map([["default-workspace", "默认工作区"]]);
-
-function displayTitle(value) {
-  const title = cleanAlias(value);
-  return DISPLAY_TITLE_OVERRIDES.get(title) ?? title;
-}
 
 function cleanAlias(value) {
   if (typeof value !== 'string') return '';
@@ -75,7 +62,7 @@ export function createDshProjectAliases({ getRegistry, getOwner, subscribeChange
       try { projectKey = projectOrderKey(row.path); } catch { continue; } // relative / unkeyable path: skip, never guess
       if (seen.has(projectKey)) continue; // ambiguous grouping: first registered wins, the rest are dropped
       seen.add(projectKey); // reserve the key before deciding on the title
-      const alias = displayTitle(row.title);
+      const alias = cleanAlias(displayProjectName(row.title));
       if (alias === '') continue; // no human title: the controller's own basename fallback is correct
       aliases.push({ projectKey, alias });
       const updatedAt = row.updatedAt instanceof Date ? row.updatedAt.toISOString() : (typeof row.updatedAt === 'string' ? row.updatedAt : null);

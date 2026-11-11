@@ -21,10 +21,8 @@
 
 /** Activity kinds the projection's allowlist accepts (see `contracts.js`). */
 /** The pseudo-project the DSH sidebar calls 「未分组」: sessions in no Workspace. */
-export const UNFILED_PROJECT_PATH = '/未分组';
-/** Display-only path prefix: `/<prefix>/<title>` gives the controller a readable
- * project name even when the real directory is `ai-briefs` or a UUID. */
-export const PROJECT_DISPLAY_PREFIX = '/__dsh_project__';
+import { UNFILED_PROJECT_PATH, PROJECT_DISPLAY_PREFIX, displayProjectName } from './project-names.js';
+export { UNFILED_PROJECT_PATH, PROJECT_DISPLAY_PREFIX };
 
 function activity(kind, sessionId, phase, extra = {}) {
   return { kind, sessionId: String(sessionId), sequence: 0, phase, ...extra };
@@ -419,7 +417,7 @@ export function createSessionControllerSource({
             // The real path stays authoritative for every path consumer; only the
             // grouping path carries the display name.
             if (!row.cwd) row.cwd = owner.path;
-            const name = typeof owner.title === 'string' && owner.title.trim() !== '' ? owner.title.trim() : null;
+            const name = displayProjectName(owner.title) || null;
             row.projectDir = name ? `${PROJECT_DISPLAY_PREFIX}/${name.replace(/[\\/]+/g, ' ')}` : owner.path;
           } else {
             row.cwd = UNFILED_PROJECT_PATH;

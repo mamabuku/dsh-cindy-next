@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.12 — 2026-11-11 (dsh-cindy-next)
+
+- The default Workspace now reads 「默认工作区」 on the phone too: the display name shared by the alias channel and the row's `projectDir` goes through one mapping (`src/project-names.js`).
+
 ## 0.1.11 — 2026-11-11 (dsh-cindy-next)
 
 - Add the controller's `projectDir`: rows now carry a display path (`/__dsh_project__/<title>`) for grouping and naming while `workingDir` keeps the real directory for every path consumer (file browser, history, reminders).
