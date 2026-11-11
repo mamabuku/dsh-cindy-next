@@ -69,6 +69,19 @@ export const RELAY_WS_URL = 'wss://device-link.cindy.com.cn/api/device-link/ws';
 /** Relay envelope version this Host speaks (Cindy `PROTOCOL_VERSION`). */
 export const PROTOCOL_VERSION = 1;
 
+/**
+ * Relay close codes that no retry can fix.
+ *
+ * `4410` is "device removed; sign in again to register" — the account no longer knows
+ * this device, so every reconnect is refused the same way. `4401` is the same dead end
+ * for an expired/revoked token. Treating them as ordinary losses is what turned a
+ * removed device into an endless 「正在重连」 ladder with no way out.
+ */
+export const RELAY_SIGN_IN_CLOSE_CODES = new Set([4401, 4410]);
+export function isRelaySignInClose(code) {
+  return RELAY_SIGN_IN_CLOSE_CODES.has(code);
+}
+
 /** Application-level heartbeat period, mirroring Cindy's client. */
 export const HEARTBEAT_INTERVAL_MS = 20_000;
 
@@ -960,6 +973,21 @@ export async function startHost(initialSource, settings = DEFAULT_HOST_SETTINGS,
   async function dropAndRetry(reason) {
     await disconnect({ keepSwitch: true, preserveExports: true });
     scheduleReconnect(reason);
+  }
+
+  /**
+   * Stop the ladder and ask the human to sign in again.
+   *
+   * The switch stays on (the user asked to be connected), but the relay has told us the
+   * credential cannot work any more, so the honest state is "not authenticated, sign-in
+   * required" instead of a timer that will fail forever.
+   */
+  async function requireSignIn(message) {
+    active = false;
+    cancelReconnect();
+    await disconnect({ keepSwitch: true, preserveExports: true });
+    status.setLogin({ authenticated: false, required: true });
+    status.setState('disconnected', `${message}，请重新登录 Cindy`);
   }
 
   /**
@@ -2695,9 +2723,14 @@ export async function startHost(initialSource, settings = DEFAULT_HOST_SETTINGS,
       // comes back on its own rather than asking the user to press reconnect.
       void dropAndRetry('Cindy relay 连接出错').then(() => undefined, () => undefined);
     });
-    socket.on('close', () => {
+    socket.on('close', (code, reason) => {
       if (myGeneration !== generation || !active) return;
-      void dropAndRetry('与 Cindy relay 的连接已断开').then(() => undefined, () => undefined);
+      const note = String(reason ?? '').trim();
+      if (isRelaySignInClose(code)) {
+        void requireSignIn(note || (code === 4410 ? '设备已从 Cindy 账号移除' : 'Cindy 登录已失效')).then(() => undefined, () => undefined);
+        return;
+      }
+      void dropAndRetry('与 Cindy relay 的连接已断开' + (Number.isInteger(code) && code !== 1000 && code !== 1005 ? `（${code}）` : '')).then(() => undefined, () => undefined);
     });
   }
 

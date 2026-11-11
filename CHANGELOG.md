@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.4 — 2026-11-11 (dsh-cindy-next)
+
+- Stop hiding an unfixable relay refusal behind a reconnect timer. The relay closes a removed device with `4410` (`device removed; sign in again to register`) and a dead token with `4401`; both are now surfaced as 「设备已从账号移除，请重新登录」 in the Settings card with the sign-in form, instead of `正在重连（第 N 次）` forever. Ordinary socket losses still retry, and the close code is appended to the retry message when there is one.
+- Add `isRelaySignInClose` and its regression test.
+
 ## 0.1.3 — 2026-11-11 (dsh-cindy-next)
 
 - Source repository moved to `github.com/mamabuku/dsh-cindy-next`; `package.json.repository` follows. No runtime change.
