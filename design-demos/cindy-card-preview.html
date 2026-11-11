@@ -5,27 +5,27 @@
 <title>Cindy 手机连接 — 真实组件预览</title>
 <style>
   :root{
-    /* DSH dark theme stand-ins, so the real component renders with its own tokens. */
-    --dsw-alias-label-primary:#e6edf3;
-    --dsw-alias-label-secondary:#9da7b3;
-    --dsw-alias-label-tertiary:#8b949e;
+    /* DSH light theme stand-ins, so the real component renders with its own tokens. */
+    --dsw-alias-label-primary:#1f2328;
+    --dsw-alias-label-secondary:#57606a;
+    --dsw-alias-label-tertiary:#6e7781;
     --dsw-alias-label-primary-foreground:#ffffff;
-    --dsw-alias-bg-layer-1:#0d1117;
-    --dsw-alias-bg-layer-2:#11161d;
-    --dsw-alias-bg-layer-3:#161b22;
-    --dsw-alias-border-l2:#30363d;
-    --dsw-alias-border-l4:#484f58;
+    --dsw-alias-bg-layer-1:#ffffff;
+    --dsw-alias-bg-layer-2:#ffffff;
+    --dsw-alias-bg-layer-3:#f2f3f5;
+    --dsw-alias-border-l2:#e6e8eb;
+    --dsw-alias-border-l4:#d0d7de;
     --dsw-alias-brand-primary:#2f81f7;
-    --dsw-alias-button-primary-fill:#238636;
-    --dsw-alias-state-success-primary:#3fb950;
-    --dsw-alias-state-error-primary:#e5534b;
-    --dsw-alias-state-warn-primary:#d29922;
+    --dsw-alias-button-primary-fill:#1f883d;
+    --dsw-alias-state-success-primary:#1a7f37;
+    --dsw-alias-state-error-primary:#cf222e;
+    --dsw-alias-state-warn-primary:#9a6700;
     --dsw-font-markdown-code-font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
   }
   html,body{margin:0;background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-primary);
     font:14px/1.5 -apple-system,BlinkMacSystemFont,"PingFang SC","Segoe UI",sans-serif}
   .shell{max-width:760px;margin:0 auto;padding:28px 24px 48px}
-  .panel{background:var(--dsw-alias-bg-layer-2);border:0.5px solid var(--dsw-alias-border-l2);border-radius:12px;padding:20px 22px}
+  .panel{background:var(--dsw-alias-bg-layer-2);border:0.5px solid var(--dsw-alias-border-l2);border-radius:12px;padding:24px 28px}
   .note{font-size:12px;color:var(--dsw-alias-label-tertiary);margin:0 0 14px}
   .tabs{display:flex;gap:8px;margin:0 0 14px}
   .tabs button{height:28px;padding:0 12px;border-radius:8px;border:0.5px solid var(--dsw-alias-border-l4);background:transparent;color:var(--dsw-alias-label-secondary);font:inherit;font-size:12px;cursor:pointer}
@@ -87,7 +87,7 @@
     return { ok: true, json: async () => ({ ok: true }) };
   };
 </script>
-<script src="../../lib/client.js"></script>
+<script src="../lib/client.js"></script>
 <script>
   const React = window.React;
   const moduleExports = registration.factory((specifier) => {

@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.7 — 2026-11-11 (dsh-cindy-next)
+
+- Settings page polish after review: row titles 15px, the account row shows kind + masked identifier instead of a bare `***`, the switch uses the platform's dark on-state, and the save/delete buttons follow the platform's filled pill shape.
+
 ## 0.1.6 — 2026-11-11 (dsh-cindy-next)
 
 - Settings page redesign: grouped rows (label column + control column) with a header status pill, section dividers, a row-style device list (online dot, name, monospace metadata, right-aligned delete) and the host line on its own rule. Same controls, copy and behaviour; only layout and styles changed.
