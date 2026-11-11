@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.14 — 2026-11-11 (dsh-cindy-next)
+
+- Hide sessions that belong to no Workspace from the phone list. They are other agents' scratch work (bridge/automation/temp directories) the user never created; the DSH desktop sidebar still groups them under 「未分组」. Direct lookup by id is unaffected.
+- Default host name is 「DSH Next」 instead of 「DSH Host」 (the device label the phone shows).
+
 ## 0.1.12 — 2026-11-11 (dsh-cindy-next)
 
 - The default Workspace now reads 「默认工作区」 on the phone too: the display name shared by the alias channel and the row's `projectDir` goes through one mapping (`src/project-names.js`).

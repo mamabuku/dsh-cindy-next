@@ -244,7 +244,7 @@ test('announces controllability so the relay will route the phone, then links it
     const hello = socket.last('hello');
     assert.equal(hello.v, 1);
     assert.equal(hello.payload.remoteControlEnabled, true, 'relay only routes link-open to a target that advertised this');
-    assert.equal(hello.payload.deviceName, 'DSH Host');
+    assert.equal(hello.payload.deviceName, 'DSH Next');
 
     socket.frame({ v: 1, kind: 'hello-ack', payload: { serverProtocolVersion: 1, deviceId: 'dev-host', userId: 'user-1' } });
     let status = runtime.getStatus();

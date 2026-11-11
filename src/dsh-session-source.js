@@ -411,19 +411,21 @@ export function createSessionControllerSource({
       let index;
       try { index = getWorkspaceIndex?.(); } catch { index = undefined; }
       if (index instanceof Map && index.size > 0) {
+        const kept = [];
         for (const row of rows) {
           const owner = index.get(row.id);
-          if (owner) {
-            // The real path stays authoritative for every path consumer; only the
-            // grouping path carries the display name.
-            if (!row.cwd) row.cwd = owner.path;
-            const name = displayProjectName(owner.title) || null;
-            row.projectDir = name ? `${PROJECT_DISPLAY_PREFIX}/${name.replace(/[\\/]+/g, ' ')}` : owner.path;
-          } else {
-            row.cwd = UNFILED_PROJECT_PATH;
-            row.projectDir = UNFILED_PROJECT_PATH;
-          }
+          // A session in no Workspace is another agent's scratch work, not a project
+          // the user created. Keep it out of the phone list; `getSession` still
+          // answers its id, so a notification can still open it.
+          if (!owner) continue;
+          if (!row.cwd) row.cwd = owner.path;
+          const name = displayProjectName(owner.title) || null;
+          // The real path stays authoritative for every path consumer; only the
+          // grouping path carries the display name.
+          row.projectDir = name ? `${PROJECT_DISPLAY_PREFIX}/${name.replace(/[\\/]+/g, ' ')}` : owner.path;
+          kept.push(row);
         }
+        rows.splice(0, rows.length, ...kept);
       } else {
         let workspacePaths;
         try { workspacePaths = getWorkspacePaths?.(); } catch { workspacePaths = undefined; }

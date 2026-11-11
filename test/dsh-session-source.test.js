@@ -599,8 +599,7 @@ test('workspace ownership decides the project, even when the summary lost its cw
   assert.deepEqual(rows.map((row) => [row.id, row.cwd, row.projectDir]), [
     ['owned', '/projects/finance', '/projects/finance'],
     ['owned-sub', '/projects/finance/sub', '/projects/finance'],
-    ['loose', '/未分组', '/未分组'],
-  ]);
+  ], 'a session in no Workspace is not a phone project');
 });
 
 test('direct lookup keeps the real working directory, not the project bucket', async () => {

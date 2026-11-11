@@ -22,7 +22,7 @@ export function rememberedDeviceId(value) {
   return typeof value?.deviceId === 'string' ? value.deviceId.trim() : '';
 }
 
-export const DEFAULT_HOST_DEVICE_NAME = 'DSH Host';
+export const DEFAULT_HOST_DEVICE_NAME = 'DSH Next';
 export const MAX_HOST_DEVICE_NAME_LENGTH = 64;
 
 /** Empty is the legacy/default sentinel; explicit names are single-line labels. */

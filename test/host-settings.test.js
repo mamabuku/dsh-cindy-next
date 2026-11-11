@@ -2,8 +2,8 @@ import test from 'node:test'; import assert from 'node:assert/strict'; import { 
 test('defaults transport to disabled and validates explicit controller authorization settings',()=>{assert.equal(DEFAULT_HOST_SETTINGS.transportEnabled,false); assert.doesNotThrow(()=>validateHostSettings({transportEnabled:false,remoteControlEnabled:true,controllers:{phone:{state:'authorized'}}})); assert.throws(()=>validateHostSettings({transportEnabled:false,remoteControlEnabled:true,controllers:{phone:{state:'unknown'}}}));});
 
 test('host names preserve legacy defaults and validate single-line Unicode labels', () => {
-  assert.equal(hostDeviceName({}), 'DSH Host');
-  assert.equal(hostDeviceName(DEFAULT_HOST_SETTINGS), 'DSH Host');
+  assert.equal(hostDeviceName({}), 'DSH Next');
+  assert.equal(hostDeviceName(DEFAULT_HOST_SETTINGS), 'DSH Next');
   assert.equal(hostDeviceName({ deviceName: ' 工作站 🖥️ ' }), '工作站 🖥️');
   for (const deviceName of ['', 'DSH Host', '家用电脑', 'a'.repeat(64), '🖥'.repeat(32)]) {
     assert.doesNotThrow(() => validateHostSettings({ ...DEFAULT_HOST_SETTINGS, deviceName }));

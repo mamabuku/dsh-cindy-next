@@ -151,7 +151,7 @@ export class HostStatus {
       return;
     }
     this.#ownDeviceId = typeof host.deviceId === 'string' ? host.deviceId : null;
-    this.#publish({ host: { deviceName: 'DSH Host', platform: 'desktop', appVersion: HOST_APP_VERSION, online: true, protocolVersion: null, userId: null, ...host } });
+    this.#publish({ host: { deviceName: 'DSH Next', platform: 'desktop', appVersion: HOST_APP_VERSION, online: true, protocolVersion: null, userId: null, ...host } });
   }
 
   /** Insert or merge one device row, preserving fields the patch omits. */
