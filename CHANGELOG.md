@@ -1,8 +1,12 @@
 # Changelog
 
+## 0.1.3 — 2026-11-11 (dsh-cindy-next)
+
+- Source repository moved to `github.com/mamabuku/dsh-cindy-next`; `package.json.repository` follows. No runtime change.
+
 ## 0.1.2 — 2026-11-11 (dsh-cindy-next)
 
-- Product copy: the plugin's description and README describe dsh-cindy-next as its own release line rather than repeating packaging history.
+- Documentation only: the plugin description and README use a plain technical description.
 - No runtime behavior change from 0.1.1.
 
 ## 0.1.1 — 2026-11-11 (dsh-cindy-next)

@@ -3,10 +3,9 @@
 A Host-side adapter connecting current Cindy clients to DeepSeek Harness: sessions, messages, approvals, todo,
 goal and the companion Settings card, over Cindy's DeviceLink channel set.
 
-Independent release line, package **dsh-cindy-next**. Two internal names intentionally keep the historical
-`dsh-cindy-host` spelling — the HTTP prefix (`/api/dsh-cindy-host`) and the durable state directory — so an
-in-place upgrade keeps the queued input and device state. The plugin id and Settings namespace follow the package
-name (`dsh-cindy-next`): DSH 0.2 keys a plugin's Settings surface by its profile entry id.
+Two internal names keep the `dsh-cindy-host` spelling — the HTTP prefix (`/api/dsh-cindy-host`) and the durable
+state directory — so an in-place upgrade keeps queued input and device state. The plugin id and Settings namespace
+follow the package name (`dsh-cindy-next`): DSH 0.2 keys a plugin's Settings surface by its profile entry id.
 
 ## Requirements and installation
 
