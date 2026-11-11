@@ -1,23 +1,77 @@
-# DSH Cindy Next (dsh-cindy-next)
+# dsh-cindy-next
 
-A Host-side adapter connecting current Cindy clients to DeepSeek Harness: sessions, messages, approvals, todo,
-goal and the companion Settings card, over Cindy's DeviceLink channel set.
+**把 Cindy 手机客户端接到这台电脑的 DeepSeek Harness 上。**
 
-Two internal names keep the `dsh-cindy-host` spelling — the HTTP prefix (`/api/dsh-cindy-host`) and the durable
-state directory — so an in-place upgrade keeps queued input and device state. The plugin id and Settings namespace
-follow the package name (`dsh-cindy-next`): DSH 0.2 keys a plugin's Settings surface by its profile entry id.
+装上这个插件，DSH 就是一台可通过 Cindy DeviceLink 被控的 Host：在手机上接着电脑上的会话继续干活——看历史、
+发指令、回答审批、管 todo 和 goal、传图片和文件，不用走回电脑前。
 
-## Requirements and installation
+![设置页](docs/images/settings-connected.png)
 
-Version **0.1.41** adds DSH `0.2.2-rc.1` compatibility and keeps historical ordinary forks visible by classifying subagents through `origin`, not parent lineage. It retains 0.1.40's task provenance, system credential storage, image delivery, thumbnails, work titles, history stability and interruption controls. Handset re-entry, rendering and white-screen acceptance remain separate.
+## 它解决什么
 
-It supports the exact **DSH 0.2.2-rc.1** carrier, while retaining `0.2.2-alpha.2`, `0.2.1-rc.3`, `0.2.1-rc.4` and `0.2.1-rc.5`. DSH 0.2.2 requires **Node.js >=24.9** (RC tested with 24.18); the older carriers retain this plugin's Node.js >=22.16 minimum. Agent/session/settings peers and alpha Schemastery are explicitly allowed, not a blanket promise for future prereleases. RC validation covers isolated Web installation and runtime smoke; the prior alpha checks cover core contracts. Neither establishes relay or handset acceptance. Install through the Desktop DSH plugin manager. CLI-managed profiles can use:
+DSH 跑在桌面，Cindy 跑在手机。两边都在，却没有一条路让手机接管桌面上的任务。这个插件补的就是那一段：
+它在 DSH Host 侧实现 Cindy 的 DeviceLink 通道，让手机把 DSH 当成自己的一个设备。
 
-```sh
-dsh plugin --profile <profile> add dsh-cindy-host@0.1.41
+## 能做什么
+
+| 方面 | 能力 |
+|---|---|
+| 会话 | 列表、详情、消息历史分页、实时流、后台任务状态 |
+| 输入 | 发送、排队、编辑、中断、继续 |
+| 审批与提问 | 手机端回答 DSH 的审批和提问 |
+| 计划 | todo 与 goal 的读写 |
+| 模型与权限 | provider / model 切换、权限模式、计划模式 |
+| 文件 | 附件读取、缩略图、文件浏览器、导出下载 |
+| 项目 | 项目排序与显示名（中文项目名同步到手机） |
+| 提醒 | schedule 的增删改查 |
+| 子代理 | 只读查看子代理运行与结果 |
+
+## 怎么工作
+
+```
+Cindy 手机 ── DeviceLink ──▶ Cindy relay ──▶ 本插件（DSH Host）──▶ DSH 会话服务
 ```
 
-Reload the Host plugin after installation. A full DSH restart is separate. Keep existing Cindy sign-in, device identity and settings; do not run two Host processes with the same identity.
+插件不复制会话、不另存数据，只做协议适配与授权：谁在控制、能做什么、能不能碰这个文件，都在本机判断。
+
+## 安装
+
+```sh
+dsh plugin --profile <profile> add ./dsh-cindy-next-0.1.7.tgz
+```
+
+或从 DSH 插件市场安装。装完 **重启 DSH** 才生效。
+
+## 第一次连接
+
+1. 设置 → **Cindy 手机连接** → 打开「连接手机」；
+2. 扫码登录 Cindy（账号和区域要和手机一致）；
+3. 手机上打开 Cindy，设备列表里出现这台 Host，即可接管。
+
+未登录时这一页就是登录入口：
+
+![未登录](docs/images/settings-signed-out.png)
+
+## 兼容与依赖
+
+- DSH `0.2.1-rc.3` ~ `0.2.2-rc.1`（peer 范围，随 DSH 版本滚动验证）；
+- Node.js ≥ 22.16（DSH 0.2.2 自身要求 ≥ 24.9）；
+- 凭据只进系统钥匙串（macOS Keychain / Linux Secret Service / Windows DPAPI 密文），不写入设置、不进日志。
+
+## 安全边界
+
+- 连接开关在本机，关掉即断；谁被允许发指令由 relay 鉴权 + 本机策略共同决定；
+- 文件访问有敏感路径拒绝表、大小上限和目录越界检查，拒绝优先于猜测；
+- 设备身份被 Cindy 账号移除时，插件会清掉旧句柄并要求重新登录，不会无限重连。
+
+## 更多
+
+实现细节、协议边界、发布与验收流程见 `doc/`（`doc/cindy-phone-link.md`、`doc/publishing.md`、`doc/releasing.md`）。
+
+---
+
+以下为技术维护文档。
+
 
 ## 0.1.41: DSH 0.2.2 RC compatibility
 

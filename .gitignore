@@ -72,3 +72,7 @@ artifacts/
 .claw/memory.sqlite
 .claw/memory.sqlite-shm
 .claw/memory.sqlite-wal
+
+# design previews (local mock-up, not part of the package)
+design-demos/vendor/
+design-demos/*.png
