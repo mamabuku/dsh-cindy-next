@@ -17,6 +17,7 @@
  */
 
 import { attachmentImageUrl, nativeMessageImages, toolResultWithImages } from './host-attachment-reference.js';
+import { renderGenuiFencesAsText } from './genui-fence.js';
 
 /**
  * DSH message roles this Host renders, and the phone row role each becomes.
@@ -390,10 +391,13 @@ export function toCindyMessageRows(message, { sessionId, createdAt, now = () => 
         // normalizer drops them, but not emitting them at all is cheaper.
         if (typeof block.text !== 'string' || block.text === '') return;
         const carriesAttachments = attachments.length > 0 && !attachmentsCarried;
+        // A `dsh-ui` card is a client-rendering contract this phone does not have;
+        // flatten it to its text content instead of shipping a wall of JSON.
+        const shown = role === 'assistant' ? renderGenuiFencesAsText(block.text) : block.text;
         rows.push({
           ...base,
           // Desktop stringifies objects before rendering assistant markdown; use native prose strings.
-          content: carriesAttachments ? { text: block.text, files: attachments } : block.text,
+          content: carriesAttachments ? { text: shown, files: attachments } : shown,
         });
         attachmentsCarried = attachmentsCarried || carriesAttachments;
         return;

@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.15 — 2026-11-12 (dsh-cindy-next)
+
+- `dsh-ui` cards no longer arrive on the phone as a wall of JSON. Cindy has no GenUI renderer, so the Host now flattens an assistant `dsh-ui` fence into its text content (title, stats, chart labels, table shape, bullets) and adds one line saying the graphic is on the desktop. User messages and every other code fence are untouched.
+
 ## 0.1.14 — 2026-11-11 (dsh-cindy-next)
 
 - Hide sessions that belong to no Workspace from the phone list. They are other agents' scratch work (bridge/automation/temp directories) the user never created; the DSH desktop sidebar still groups them under 「未分组」. Direct lookup by id is unaffected.
