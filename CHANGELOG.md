@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.16 — 2026-11-12 (dsh-cindy-next)
+
+- Fix 0.1.15 over-reach: `dsh-ui` cards were flattened for every client, including desktop Cindy builds that render them. The fallback is now per controller: only `ios`/`android` controllers get the text summary; `darwin`/`win32`/`linux` keep the card, on both history reads and live pushes.
+
 ## 0.1.15 — 2026-11-12 (dsh-cindy-next)
 
 - `dsh-ui` cards no longer arrive on the phone as a wall of JSON. Cindy has no GenUI renderer, so the Host now flattens an assistant `dsh-ui` fence into its text content (title, stats, chart labels, table shape, bullets) and adds one line saying the graphic is on the desktop. User messages and every other code fence are untouched.

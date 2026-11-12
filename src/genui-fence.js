@@ -117,3 +117,46 @@ export function renderGenuiFencesAsText(text) {
     return `${heading}\n\n（图形卡片在电脑端查看）`;
   });
 }
+
+const MOBILE = new Set(['ios', 'android']);
+
+export function clientNeedsTextFallback(platform) {
+  return MOBILE.has(platform);
+}
+
+/**
+ * Flatten every assistant text row in a read result for a mobile client.
+ * Walks objects/arrays so it applies to a bare row array and to the paged
+ * history view alike, without either caller describing its shape here.
+ */
+export function flattenGenuiRows(value, platform) {
+  if (!clientNeedsTextFallback(platform)) return value;
+  const walk = (node) => {
+    if (Array.isArray(node)) return node.map(walk);
+    if (node === null || typeof node !== 'object') return node;
+    if (node.role === 'assistant') {
+      if (typeof node.content === 'string') return { ...node, content: renderGenuiFencesAsText(node.content) };
+      if (node.content && typeof node.content.text === 'string') return { ...node, content: { ...node.content, text: renderGenuiFencesAsText(node.content.text) } };
+    }
+    let changed = false;
+    const out = {};
+    for (const [key, item] of Object.entries(node)) { const next = walk(item); out[key] = next; if (next !== item) changed = true; }
+    return changed ? out : node;
+  };
+  return walk(value);
+}
+
+/** Flatten a raw DSH message's text blocks before it is pushed to a mobile client. */
+export function flattenGenuiMessage(message, platform) {
+  if (!clientNeedsTextFallback(platform)) return message;
+  if (!message || message.role !== 'assistant' || !Array.isArray(message.content)) return message;
+  let changed = false;
+  const content = message.content.map((block) => {
+    if (block && block.type === 'text' && typeof block.text === 'string') {
+      const text = renderGenuiFencesAsText(block.text);
+      if (text !== block.text) { changed = true; return { ...block, text }; }
+    }
+    return block;
+  });
+  return changed ? { ...message, content } : message;
+}

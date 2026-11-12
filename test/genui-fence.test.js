@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { renderGenuiFencesAsText, summarizeGenuiCard } from '../src/genui-fence.js';
+import { renderGenuiFencesAsText, summarizeGenuiCard, flattenGenuiRows, flattenGenuiMessage } from '../src/genui-fence.js';
 import { toCindyMessageRows } from '../src/cindy-message-row.js';
 
 const CARD = {
@@ -42,15 +42,23 @@ test('other fences and prose are untouched', () => {
   assert.equal(renderGenuiFencesAsText('plain'), 'plain');
 });
 
-test('the message projection applies the fallback to assistant text only', () => {
+test('read results are flattened only for mobile platforms', () => {
   const fence = `\`\`\`dsh-ui\n${JSON.stringify(CARD)}\n\`\`\``;
-  const assistant = toCindyMessageRows({ id: 'm1', role: 'assistant', content: [{ type: 'text', text: fence }] }, { sessionId: 's1' });
-  assert.equal(assistant.length, 1);
-  assert.match(assistant[0].content, /GenUI 手机端渲染测试/);
-  assert.doesNotMatch(assistant[0].content, /"type"/);
+  const rows = [{ id: 'a', role: 'assistant', content: fence }, { id: 'u', role: 'user', content: fence }];
+  const mobile = flattenGenuiRows(rows, 'ios');
+  assert.match(mobile[0].content, /GenUI 手机端渲染测试/);
+  assert.doesNotMatch(mobile[0].content, /"type"/);
+  assert.equal(mobile[1].content, fence, 'a user who pasted a fence sees what they pasted');
+  assert.equal(flattenGenuiRows(rows, 'darwin'), rows, 'a desktop controller keeps the card');
+  assert.equal(flattenGenuiRows(rows, null), rows);
+});
 
-  const user = toCindyMessageRows({ id: 'm2', role: 'user', content: [{ type: 'text', text: fence }] }, { sessionId: 's1' });
-  assert.equal(user[0].content, fence, 'a user who pasted a fence sees exactly what they pasted');
+test('the live push payload is flattened for a phone and kept for a desktop', () => {
+  const fence = `\`\`\`dsh-ui\n${JSON.stringify(CARD)}\n\`\`\``;
+  const message = { role: 'assistant', content: [{ type: 'text', text: fence }] };
+  assert.match(flattenGenuiMessage(message, 'android').content[0].text, /GenUI 手机端渲染测试/);
+  assert.equal(flattenGenuiMessage(message, 'darwin'), message);
+  assert.equal(flattenGenuiMessage({ role: 'user', content: [{ type: 'text', text: fence }] }, 'ios').content[0].text, fence);
 });
 
 test('a card with only a title still yields something readable', () => {

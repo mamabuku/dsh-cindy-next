@@ -62,6 +62,7 @@ import { loadSession as loadNetworkCredential } from './credential-store.js';
 import { sessionEndpoints, relayForEndpoints } from './cindy-auth-endpoints.js';
 import { RECONNECT_STABLE_RESET_MS, computeReconnectDelayMs } from './host-reconnect.js';
 import { MAX_FRAME_BYTES, FRAME_BUDGET_BYTES, fitInvokeResultToFrame, frameByteLength } from './host-frame-budget.js';
+import { flattenGenuiMessage } from './genui-fence.js';
 
 /** Mainland DeviceLink relay. The settings card never guesses this value. */
 export const RELAY_WS_URL = 'wss://device-link.cindy.com.cn/api/device-link/ws';
@@ -1503,6 +1504,13 @@ export async function startHost(initialSource, settings = DEFAULT_HOST_SETTINGS,
    * @param channel - the push channel.
    * @param payload - the channel's payload.
    */
+  /** The controller's platform from the relay directory, or null when unknown. */
+  function controllerPlatform(deviceId) {
+    try {
+      return status.snapshot().devices.find((device) => device.deviceId === deviceId)?.platform ?? null;
+    } catch { return null; }
+  }
+
   function pushSessionUpdate(sessionId, channel, payload) {
     if (channel === 'maker:input:projection' && activeDelivery) payload = activeDelivery.currentProjection(sessionId, [], payload);
     const guarded = channel === 'local-db:messages:created' || channel === 'maker:event';
@@ -1519,7 +1527,10 @@ export async function startHost(initialSource, settings = DEFAULT_HOST_SETTINGS,
     recordPush(sessionId, channel, reachable, payload);
     if (watchers === 0) return;
     for (const deviceId of devices) {
-      send({ v: PROTOCOL_VERSION, kind: 'push', dst: deviceId, payload: { channel, payload } });
+      // A card only a GenUI renderer can draw is flattened for phones; a desktop
+      // controller renders it, so it keeps the original frame.
+      const stillMobile = payload?.message === undefined ? payload : { ...payload, message: flattenGenuiMessage(payload.message, controllerPlatform(deviceId)) };
+      send({ v: PROTOCOL_VERSION, kind: 'push', dst: deviceId, payload: { channel, payload: stillMobile } });
     }
   }
 
@@ -1863,6 +1874,7 @@ export async function startHost(initialSource, settings = DEFAULT_HOST_SETTINGS,
     // Every row must name the device it came from, or the phone's home filter
     // drops it as soon as the user selects this Host.
     getDevice: () => ({ deviceId: status.ownDeviceId, deviceName: hostDeviceName(current) }),
+    getControllerPlatform: (deviceId) => controllerPlatform(deviceId),
   });
 
   /**

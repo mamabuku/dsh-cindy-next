@@ -14,6 +14,7 @@
  * default input/durable-outbox path must be implemented end to end.
  */
 import { agentKindForModel, toCindyActiveSessions, toCindySessionList, toCindySessionListRow } from './cindy-session-row.js';
+import { flattenGenuiRows } from './genui-fence.js';
 import { toAgentCapabilities, toCindyPermissionMode, toDshPermissionMode, toNewMakerDefaults, toPermissionOptions, toProviderList } from './host-models.js';
 import { queueItemsFromInbox } from './host-input-queue.js';
 import { toAgentSkills, toAgentCommands, toAtResources } from './host-palette.js';
@@ -418,6 +419,7 @@ export function createChannelRouter({
   onUnsubscribe,
   now = () => new Date(),
   getDevice,
+  getControllerPlatform,
 }) {
   /**
    * Turn states for the two polled channels, without paying for a row fold.
@@ -426,6 +428,13 @@ export function createChannelRouter({
    * listing) falls back to it rather than failing: the difference is cost, not answer.
    */
   const listStates = typeof listSessionStates === 'function' ? listSessionStates : listSessions;
+  /** The requesting controller's platform, or null when unknown. */
+  const platformFor = (request) => {
+    if (typeof getControllerPlatform !== 'function') return null;
+    try { return getControllerPlatform(request?.src) ?? null; } catch { return null; }
+  };
+  /** Flatten dsh-ui cards only for clients with no GenUI renderer. */
+  const forClient = (value, request) => flattenGenuiRows(value, platformFor(request));
   /**
    * Resolve the Host's write/read capabilities *per request*.
    *
@@ -575,7 +584,7 @@ export function createChannelRouter({
       const capabilities = capabilitiesNow(); const port = capabilities.referenceHistory;
       if (typeof port?.read !== 'function') return invokeError(request, 'NOT_AVAILABLE', 'Native reference source history is not composed');
       if (capabilities.sessionHidden?.(args[0]?.sessionId) === true) return invokeError(request, 'NOT_FOUND', 'Source session is hidden');
-      try { return invokeResult(request, await port.read(args[0], { getView: id => sessionRow(id) })); }
+      try { return invokeResult(request, forClient(await port.read(args[0], { getView: id => sessionRow(id) }), request)); }
       catch (error) { return invokeError(request, refusalCodeOf(error), String(error?.message ?? error)); }
     }
 
@@ -711,7 +720,7 @@ export function createChannelRouter({
       const read = capabilitiesNow().readMessages;
       if (typeof read !== 'function') return invokeError(request, 'NOT_AVAILABLE', 'This DSH Host cannot read message history yet');
       const options = args[1] !== null && typeof args[1] === 'object' ? args[1] : {};
-      const rows = await read(sessionId, options);
+      const rows = forClient(await read(sessionId, options), request);
       // A user row in history is delivery evidence to Cindy, even if it carries
       // an unknown pendingDelivery field. Keep unconsumed prompts exclusively in
       // InputProjection, or a list read falsely settles the phone's queue.
@@ -1898,7 +1907,7 @@ export function createChannelRouter({
           : await view.intent(sessionId, args[1]);
       // Pending bodies belong in InputProjection, never synthetic user history.
       return answered?.ok === true
-        ? invokeResult(request, answered.result)
+        ? invokeResult(request, forClient(answered.result, request))
         : invokeError(request, answered?.code ?? 'INTERNAL', answered?.message ?? 'history view failed');
     }
 
